@@ -1,0 +1,3 @@
+openai
+camoufox[geoip]
+mcp[cli]
