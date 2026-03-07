@@ -1,6 +1,6 @@
 # shellm
 
-A lightweight [nanoclaw](https://github.com/nanoclaw) alternative. One base class, 11 built-in tools, extend in 15 lines.
+A lightweight [OpenClaw](https://github.com/openclaw) alternative. One base class, 11 built-in tools, extend in 15 lines.
 
 **shellm** is a minimal CLI chat framework for tool-using LLMs. It gives any OpenAI-compatible model web search, shell access, cron scheduling, persistent memory, and chat logging -- out of the box, with zero config.
 
@@ -10,7 +10,7 @@ echo "Summarize today's news" | ./gpt5mini_chat.py --daemon stdin
 
 ## Why shellm?
 
-| | nanoclaw | shellm |
+| | OpenClaw | shellm |
 |---|---------|--------|
 | Setup | Config files, plugin system, dependencies | One Python class. `pip install openai camoufox` |
 | Add a model | Write adapter, register, configure | 15 lines: subclass, set 3 attributes, done |
