@@ -7,6 +7,7 @@ import sys
 
 from openai import OpenAI
 from web_search import search, fetch_page, format_results
+from cron_manager import cron_list, cron_create, cron_delete
 
 API_KEY = os.environ.get("MOONSHOT_API_KEY", "YOUR_API_KEY_HERE")
 
@@ -48,6 +49,43 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "cron_list",
+            "description": "List all current cron jobs for this user.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cron_create",
+            "description": "Create a new scheduled cron job. The user will be asked to confirm before it is added.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "schedule": {"type": "string", "description": "Cron schedule expression, e.g. '0 9 * * *' for daily at 9am, '*/5 * * * *' for every 5 minutes"},
+                    "command": {"type": "string", "description": "Shell command to run"},
+                },
+                "required": ["schedule", "command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cron_delete",
+            "description": "Delete a cron job by its index number (from cron_list). The user will be asked to confirm before deletion.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer", "description": "Index of the cron job to delete"},
+                },
+                "required": ["index"],
+            },
+        },
+    },
 ]
 
 
@@ -86,6 +124,18 @@ def handle_tool_calls(response_message, messages):
                 result_text = text
             except Exception as e:
                 result_text = f"Fetch error: {e}"
+        elif tool_call.function.name == "cron_list":
+            result_text = cron_list()
+            print(result_text)
+        elif tool_call.function.name == "cron_create":
+            schedule = args.get("schedule", "")
+            command = args.get("command", "")
+            result_text = cron_create(schedule, command)
+            print(result_text)
+        elif tool_call.function.name == "cron_delete":
+            index = args.get("index", 0)
+            result_text = cron_delete(index)
+            print(result_text)
         else:
             result_text = f"Unknown tool: {tool_call.function.name}"
         messages.append({
