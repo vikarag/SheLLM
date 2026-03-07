@@ -10,6 +10,9 @@ __pycache__/
 .claude/
 .omc/
 
+# Shared memory (personal data)
+memory.json
+
 # Environment variables
 .env
 .env.*
