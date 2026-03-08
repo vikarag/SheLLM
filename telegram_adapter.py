@@ -13,6 +13,7 @@ from telegram_format import md_to_tg_html, split_message
 
 WORKSPACE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace")
 CHAT_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_logs.json")
+SESSIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "telegram_sessions.json")
 
 
 def _extract_text(filepath):
@@ -161,18 +162,49 @@ class TelegramAdapter:
         ./deepseek_chat.py --telegram
     """
 
+    MAX_SESSION_MESSAGES = 50
+
     def __init__(self, chat_client, bot_token=None):
         self.client = chat_client
         self.client._silent = True
         self.client._mode = "telegram"
         self.bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
         self.sessions = {}  # chat_id -> messages list
+        self._load_sessions()
 
         # Vision engine (GPT-5 Mini) for image analysis
         from gpt5mini_chat import GPT5MiniChat
         self._vision_engine = GPT5MiniChat()
         self._vision_engine._silent = True
         self._vision_engine._mode = "telegram"
+
+    def _load_sessions(self):
+        """Load sessions from disk on startup."""
+        try:
+            if os.path.exists(SESSIONS_FILE):
+                with open(SESSIONS_FILE) as f:
+                    data = json.load(f)
+                # JSON keys are strings — convert back to int chat_ids
+                self.sessions = {int(k): v for k, v in data.items()}
+        except Exception:
+            self.sessions = {}
+
+    def _save_sessions(self):
+        """Persist sessions to disk."""
+        try:
+            with open(SESSIONS_FILE, "w") as f:
+                json.dump(self.sessions, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def _trim_session(self, messages):
+        """Cap a session at MAX_SESSION_MESSAGES, preserving the system message if present."""
+        if len(messages) <= self.MAX_SESSION_MESSAGES:
+            return messages
+        # Keep system message (index 0) if it exists, plus the most recent messages
+        if messages and messages[0].get("role") == "system":
+            return [messages[0]] + messages[-(self.MAX_SESSION_MESSAGES - 1):]
+        return messages[-self.MAX_SESSION_MESSAGES:]
 
     def get_or_create_session(self, chat_id):
         if chat_id not in self.sessions:
@@ -240,6 +272,11 @@ class TelegramAdapter:
                     pass
 
         final_answer = await process_task
+
+        # Persist session after processing
+        self.sessions[chat_id] = self._trim_session(messages)
+        self._save_sessions()
+
         return final_answer or "(No response)"
 
     def _analyze_image(self, b64_data, prompt):
@@ -316,6 +353,7 @@ class TelegramAdapter:
                 messages = adapter.get_or_create_session(chat_id)
                 messages.append({"role": "user", "content": f"[Sent an image] {caption}"})
                 messages.append({"role": "assistant", "content": response})
+                adapter._save_sessions()
 
                 await adapter._send_response(update.message, response)
             except Exception as e:
@@ -369,7 +407,9 @@ class TelegramAdapter:
             prompt = (
                 f"The user sent a file: **{filename}**\n\n"
                 f"File content:\n```\n{text_content}\n```\n\n"
-                f"{caption or 'Please analyze this document and provide a summary.'}"
+                f"{caption or 'Please analyze this document and provide a summary.'}\n\n"
+                "Note: You can offer to index this document with rag_index for future "
+                "semantic search if the user might want to ask questions about it later."
             )
 
             bot = context.bot
@@ -415,6 +455,7 @@ class TelegramAdapter:
         async def _on_clear(update: Update, context):
             chat_id = update.effective_chat.id
             adapter.sessions.pop(chat_id, None)
+            adapter._save_sessions()
             await update.message.reply_text("Conversation cleared.")
 
         async def _on_model(update: Update, context):
@@ -510,13 +551,18 @@ class TelegramAdapter:
 
         async def _on_usage(update: Update, context):
             """Show API balances and local usage stats."""
+            from telegram import LinkPreviewOptions
             await update.message.chat.send_action(ChatAction.TYPING)
             result = await asyncio.to_thread(_fetch_usage)
-            await update.message.reply_text(result, parse_mode="HTML")
+            await update.message.reply_text(
+                result, parse_mode="HTML",
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
+            )
 
         async def _on_forget(update: Update, context):
             chat_id = update.effective_chat.id
             adapter.sessions.pop(chat_id, None)
+            adapter._save_sessions()
             await update.message.reply_text(
                 "Conversation history cleared.\n"
                 "Note: shared memory is preserved (use the LLM to delete specific entries)."

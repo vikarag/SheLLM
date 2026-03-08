@@ -1,5 +1,5 @@
 openai
-camoufox[geoip]
+numpy
 mcp[cli]
 python-dotenv
 python-telegram-bot  # optional: for --telegram mode

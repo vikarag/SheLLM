@@ -10,9 +10,13 @@ __pycache__/
 .claude/
 .omc/
 
-# Shared memory and chat logs (personal data)
+# Shared memory, chat logs, sessions (personal data)
 memory.json
 chat_logs.json
+telegram_sessions.json
+
+# RAG store (embeddings and indexed documents)
+rag_store/
 
 # Workspace (shellm project files)
 workspace/

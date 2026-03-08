@@ -12,10 +12,11 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 from openai import OpenAI
-from web_search import search, fetch_page, format_results
 from cron_manager import cron_list, cron_create, cron_delete
 from command_runner import run_command
 from memory_manager import memory_read, memory_write, memory_search, memory_delete
+from file_tools import read_file, write_file, list_directory, search_files
+from rag_engine import rag_index, rag_search, rag_list, rag_delete
 
 CHAT_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_logs.json")
 KST = timezone(timedelta(hours=9))
@@ -24,12 +25,12 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "web_search",
-            "description": "Search the web for current information. Use when the user asks about recent events, real-time data, or anything you're unsure about.",
+            "name": "web_research",
+            "description": "Research a topic using the web. Searches, reads pages, and returns a comprehensive answer. Use when you need current information, facts, or real-time data.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "The search query"},
+                    "query": {"type": "string", "description": "The research query"},
                 },
                 "required": ["query"],
             },
@@ -38,14 +39,115 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "read_webpage",
-            "description": "Fetch and read the full text content of a webpage. Use after web_search to read detailed content from a specific search result URL.",
+            "name": "read_file",
+            "description": "Read a file from workspace/ with line numbers. Use offset and limit for large files.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "The URL to read"},
+                    "path": {"type": "string", "description": "Relative path within workspace/"},
+                    "offset": {"type": "integer", "description": "Start line (0-based, default 0)"},
+                    "limit": {"type": "integer", "description": "Max lines to return (default 200)"},
                 },
-                "required": ["url"],
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Write or append to a file in workspace/. Creates parent directories automatically.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative path within workspace/"},
+                    "content": {"type": "string", "description": "Content to write"},
+                    "mode": {"type": "string", "enum": ["overwrite", "append"], "description": "Write mode (default: overwrite)"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_directory",
+            "description": "List files and directories in workspace/ with sizes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative path within workspace/ (default: root)"},
+                    "recursive": {"type": "boolean", "description": "List recursively (default: false)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_files",
+            "description": "Regex search across files in workspace/. Returns matching lines with file paths and line numbers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Regex pattern to search for"},
+                    "path": {"type": "string", "description": "Subdirectory to search in (default: all of workspace/)"},
+                    "file_glob": {"type": "string", "description": "File glob filter, e.g. '*.py' (default: '*')"},
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rag_index",
+            "description": "Index a document for semantic search. Chunks the text, generates embeddings, and stores for later retrieval. Use when the user wants to save a document for future Q&A.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "The document text to index"},
+                    "filename": {"type": "string", "description": "Name/label for the document"},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Optional tags for categorization"},
+                },
+                "required": ["text", "filename"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rag_search",
+            "description": "Search indexed documents by semantic similarity. Returns the most relevant chunks. Use when the user asks about previously indexed documents.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query"},
+                    "top_k": {"type": "integer", "description": "Number of results to return (default: 5)"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rag_list",
+            "description": "List all documents in the RAG index.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rag_delete",
+            "description": "Delete a document from the RAG index by its doc_id.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "doc_id": {"type": "string", "description": "The document ID to delete (from rag_list)"},
+                },
+                "required": ["doc_id"],
             },
         },
     },
@@ -293,26 +395,45 @@ class BaseChatClient:
     def execute_tool(self, name, args):
         tool_record = {"tool": name, "args": args}
         self._current_tool_calls.append(tool_record)
-        if name == "web_search":
+        if name == "web_research":
             query = args.get("query", "")
-            self._print(f"[Searching: {query}...]")
+            self._print(f"[Researching: {query}...]")
             try:
-                results = search(query)
-                result_text = format_results(results)
+                from gpt5mini_chat import GPT5MiniChat
+                researcher = GPT5MiniChat()
+                researcher._silent = True
+                response = researcher.client.chat.completions.create(
+                    model=researcher.MODEL,
+                    messages=[{"role": "user", "content": query}],
+                    tools=[{"type": "web_search_preview"}],
+                )
+                result = response.choices[0].message.content or "(No results)"
             except Exception as e:
-                result_text = f"Search error: {e}"
-            self._print(result_text)
-            return result_text
-        elif name == "read_webpage":
-            url = args.get("url", "")
-            self._print(f"[Reading: {url}...]")
-            try:
-                text = fetch_page(url)
-                if len(text) > 15000:
-                    text = text[:15000] + "\n\n[... content truncated ...]"
-                return text
-            except Exception as e:
-                return f"Fetch error: {e}"
+                result = f"Research error: {e}"
+            self._print("[Research complete]")
+            return result
+        elif name == "read_file":
+            return read_file(args.get("path", ""), offset=args.get("offset", 0), limit=args.get("limit", 200))
+        elif name == "write_file":
+            result = write_file(args.get("path", ""), args.get("content", ""), mode=args.get("mode", "overwrite"))
+            self._print(result)
+            return result
+        elif name == "list_directory":
+            return list_directory(args.get("path", "."), recursive=args.get("recursive", False))
+        elif name == "search_files":
+            return search_files(args.get("pattern", ""), path=args.get("path", "."), file_glob=args.get("file_glob", "*"))
+        elif name == "rag_index":
+            result = rag_index(args.get("text", ""), filename=args.get("filename", "untitled"), tags=args.get("tags"))
+            self._print(result)
+            return result
+        elif name == "rag_search":
+            return rag_search(args.get("query", ""), top_k=args.get("top_k", 5))
+        elif name == "rag_list":
+            return rag_list()
+        elif name == "rag_delete":
+            result = rag_delete(args.get("doc_id", ""))
+            self._print(result)
+            return result
         elif name == "cron_list":
             result_text = cron_list()
             self._print(result_text)
@@ -441,8 +562,11 @@ class BaseChatClient:
         system_content = (
             f"You are shellm, a helpful AI assistant. Current date/time: {now} (Asia/Seoul, UTC+9). "
             "You have persistent shared memory (use memory_read at the start of a conversation to recall "
-            "who you are and what you know about the user). You can search the web, execute shell commands, "
-            "manage cron jobs, and review past chat logs with chat_log_read. "
+            "who you are and what you know about the user). You can search the web (via web_research, "
+            "delegated to GPT-5 Mini), execute shell commands, manage cron jobs, read/write/search files "
+            "in workspace/, and review past chat logs with chat_log_read. "
+            "You also have a RAG system — use rag_index to store documents for semantic search, "
+            "and rag_search to retrieve relevant chunks later. Suggest indexing when the user sends documents. "
             "Proactively save useful information about the user to memory for future sessions.\n\n"
             "SELF-AWARENESS: Your own source code lives at ~/llm-api-vault/. You ARE shellm — "
             "when the user mentions 'your backend', 'your code', or 'your system', they mean YOUR files. "
@@ -454,7 +578,8 @@ class BaseChatClient:
             "  - telegram_adapter.py — your Telegram bot interface\n"
             "  - telegram_format.py — Markdown-to-HTML formatter for Telegram\n"
             "  - memory_manager.py — your persistent memory system (memory.json)\n"
-            "  - web_search.py — web search via Camoufox browser\n"
+            "  - file_tools.py — file operations (read, write, list, search) scoped to workspace/\n"
+            "  - rag_engine.py — RAG document indexing and semantic search\n"
             "  - command_runner.py — shell command execution\n"
             "  - cron_manager.py — cron job management\n"
             "  - daemon_mode.py — stdin/file/socket daemon modes\n"

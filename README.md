@@ -1,8 +1,8 @@
 # shellm
 
-A lightweight [OpenClaw](https://github.com/openclaw) alternative. One base class, 11 built-in tools, extend in 15 lines.
+A lightweight [OpenClaw](https://github.com/openclaw) alternative. One base class, 18 built-in tools, extend in 15 lines.
 
-**shellm** is a minimal CLI chat framework for tool-using LLMs. It gives any OpenAI-compatible model web search, shell access, cron scheduling, persistent memory, and chat logging -- out of the box, with zero config.
+**shellm** is a minimal CLI chat framework for tool-using LLMs. It gives any OpenAI-compatible model web search, shell access, cron scheduling, persistent memory, file editing, RAG document search, and chat logging -- out of the box, with zero config.
 
 ```bash
 echo "Summarize today's news" | ./gpt5mini_chat.py --daemon stdin
@@ -12,7 +12,7 @@ echo "Summarize today's news" | ./gpt5mini_chat.py --daemon stdin
 
 | | OpenClaw | shellm |
 |---|---------|--------|
-| Setup | Config files, plugin system, dependencies | One Python class. `pip install openai camoufox` |
+| Setup | Config files, plugin system, dependencies | One Python class. `pip install openai numpy` |
 | Add a model | Write adapter, register, configure | 15 lines: subclass, set 3 attributes, done |
 | Tool system | Plugin architecture | Built-in: search, shell, cron, memory, chat logs |
 | Modes | Interactive | Interactive, daemon (stdin/file/socket), Telegram |
@@ -56,7 +56,6 @@ git clone https://github.com/vikarag/shellm.git
 cd shellm
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-python -m camoufox fetch
 
 # Copy .env.example and fill in your keys
 cp .env.example .env
@@ -83,14 +82,21 @@ if __name__ == "__main__":
 
 Override `build_params()` for custom behavior (see `deepseek_chat.py` and `kimi_chat.py` for examples).
 
-## Built-in Tools (11)
+## Built-in Tools (18)
 
 Every engine gets all of these automatically:
 
 | Tool | What it does |
 |------|-------------|
-| `web_search` | DuckDuckGo search via Camoufox (headless anti-detect Firefox) |
-| `read_webpage` | Fetch and read full page content from any URL |
+| `web_research` | Web search and synthesis via GPT-5 Mini (native web search) |
+| `read_file` | Read files from workspace/ with line numbers |
+| `write_file` | Write or append to files in workspace/ |
+| `list_directory` | List files and directories in workspace/ with sizes |
+| `search_files` | Regex search across files in workspace/ |
+| `rag_index` | Index a document for semantic search (chunking + embeddings) |
+| `rag_search` | Search indexed documents by semantic similarity |
+| `rag_list` | List all indexed documents |
+| `rag_delete` | Delete a document from the RAG index |
 | `run_command` | Execute shell commands (with confirmation + blocklist) |
 | `cron_create` | Schedule cron jobs |
 | `cron_list` | List current cron jobs |
@@ -105,7 +111,7 @@ The model decides when to use them. Up to 10 tool-call rounds per turn.
 
 ## Telegram Bot
 
-shellm runs natively as a Telegram bot with real-time streaming and HTML-formatted responses.
+shellm runs natively as a Telegram bot with real-time streaming, HTML-formatted responses, and persistent sessions (conversations survive bot restarts).
 
 ```bash
 # Set your bot token in .env, then:
@@ -159,8 +165,8 @@ The LLM can read its own past logs via the `chat_log_read` tool.
 ## Architecture
 
 ```
-BaseChatClient (base_chat.py, ~500 loc)
-  |-- 11 built-in tools
+BaseChatClient (base_chat.py, ~600 loc)
+  |-- 18 built-in tools
   |-- Streaming + batch response handling
   |-- Optional reasoning/thinking display
   |-- Self-aware system prompt (knows its own codebase)
@@ -168,28 +174,22 @@ BaseChatClient (base_chat.py, ~500 loc)
   |-- System timezone awareness (KST)
   |-- Daemon mode (daemon_mode.py)
   +-- Telegram adapter (telegram_adapter.py + telegram_format.py)
+        +-- Persistent sessions (telegram_sessions.json)
+
+Modules:
+  |-- file_tools.py      File ops (read/write/list/search) scoped to workspace/
+  |-- rag_engine.py      Document indexing + semantic search (OpenAI embeddings + numpy)
+  |-- command_runner.py   Shell command execution
+  |-- cron_manager.py     Cron job management
+  +-- memory_manager.py   Persistent shared memory (memory.json)
 
 Engines: 15-50 lines each
   |-- deepseek_chat.py   Chat    (DeepSeek, +reasoner conditional logic)
   |-- kimi_chat.py       Code    (Kimi K2.5, +thinking mode toggle)
-  +-- gpt5mini_chat.py   Research (GPT-5 Mini, config only)
+  +-- gpt5mini_chat.py   Research (GPT-5 Mini, config only + web search delegate)
 
-workspace/  -- shellm's project directory for file output
-```
-
-## MCP Server
-
-`mcp_web_search_server.py` exposes web search as an MCP tool for Claude Desktop or other MCP clients:
-
-```json
-{
-  "mcpServers": {
-    "web-search": {
-      "command": "/path/to/shellm/venv/bin/python",
-      "args": ["/path/to/shellm/mcp_web_search_server.py"]
-    }
-  }
-}
+workspace/   -- shellm's project directory for file output
+rag_store/   -- RAG index, chunks, and embeddings
 ```
 
 ## License
