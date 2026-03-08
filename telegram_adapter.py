@@ -1,29 +1,67 @@
 #!/home/gslee/llm-api-vault/venv/bin/python3
-"""Telegram bot adapter for LLM chat clients with streaming via sendMessageDraft."""
+"""Telegram bot adapter for LLM chat clients with streaming, vision, and file handling."""
 
 import asyncio
+import base64
 import html as html_mod
 import os
 import time
 
 from telegram_format import md_to_tg_html, split_message
 
+WORKSPACE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace")
+
+
+def _extract_text(filepath):
+    """Extract text content from various file formats."""
+    ext = os.path.splitext(filepath)[1].lower()
+
+    # Plain text formats
+    text_exts = (
+        '.txt', '.md', '.csv', '.json', '.py', '.js', '.ts', '.html', '.css',
+        '.sh', '.yml', '.yaml', '.toml', '.cfg', '.ini', '.log', '.xml',
+        '.sql', '.r', '.java', '.c', '.cpp', '.h', '.go', '.rs', '.rb',
+    )
+    if ext in text_exts:
+        with open(filepath, 'r', errors='replace') as f:
+            return f.read()
+
+    if ext == '.pdf':
+        try:
+            import pdfplumber
+            parts = []
+            with pdfplumber.open(filepath) as pdf:
+                for page in pdf.pages:
+                    parts.append(page.extract_text() or "")
+            return "\n\n".join(parts)
+        except ImportError:
+            return "[Install pdfplumber to read PDFs: pip install pdfplumber]"
+
+    if ext == '.docx':
+        try:
+            from docx import Document
+            doc = Document(filepath)
+            return "\n\n".join(p.text for p in doc.paragraphs if p.text)
+        except ImportError:
+            return "[Install python-docx to read DOCX: pip install python-docx]"
+
+    # Fallback: try reading as text
+    try:
+        with open(filepath, 'r', errors='replace') as f:
+            return f.read()
+    except Exception:
+        return None
+
 
 class TelegramAdapter:
     """Connects a BaseChatClient to a Telegram bot interface.
 
-    Uses Telegram Bot API 9.5 sendMessageDraft for real-time streaming
-    of LLM responses in private chats.
-
-    Supported Telegram commands:
-        /start   -- Welcome message and help
-        /clear   -- Reset conversation history
-        /model   -- Show current engine info
-        /search  -- Force web search research
-        /memory  -- Read shared memory
-        /forget  -- Clear conversation + memory for this chat
-        /logs    -- Show recent chat history
-        /help    -- Show all available commands
+    Features:
+        - Real-time streaming via sendMessageDraft (Bot API 9.5)
+        - HTML-formatted responses (Markdown → Telegram HTML)
+        - Document handling (PDF, DOCX, CSV, TXT, code files)
+        - Image analysis via GPT-5 Mini vision
+        - Workspace file management
 
     Usage:
         ./deepseek_chat.py --telegram
@@ -35,6 +73,12 @@ class TelegramAdapter:
         self.client._mode = "telegram"
         self.bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
         self.sessions = {}  # chat_id -> messages list
+
+        # Vision engine (GPT-5 Mini) for image analysis
+        from gpt5mini_chat import GPT5MiniChat
+        self._vision_engine = GPT5MiniChat()
+        self._vision_engine._silent = True
+        self._vision_engine._mode = "telegram"
 
     def get_or_create_session(self, chat_id):
         if chat_id not in self.sessions:
@@ -104,6 +148,21 @@ class TelegramAdapter:
         final_answer = await process_task
         return final_answer or "(No response)"
 
+    def _analyze_image(self, b64_data, prompt):
+        """Send image to GPT-5 Mini for vision analysis."""
+        response = self._vision_engine.client.chat.completions.create(
+            model=self._vision_engine.MODEL,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_data}"}},
+                ],
+            }],
+            max_tokens=2000,
+        )
+        return response.choices[0].message.content or "(No response)"
+
     def run(self):
         """Start the Telegram bot with streaming support."""
         if not self.bot_token:
@@ -124,6 +183,8 @@ class TelegramAdapter:
         # Import memory functions for /memory and /forget commands
         from memory_manager import memory_read, memory_search
 
+        # ── Message handlers ───────────────────────────────────────
+
         async def _on_message(update: Update, context):
             chat_id = update.effective_chat.id
             text = update.message.text.strip()
@@ -137,13 +198,102 @@ class TelegramAdapter:
             except Exception as e:
                 await update.message.reply_text(f"Error: {e}")
 
+        async def _on_photo(update: Update, context):
+            """Handle photos — route to GPT-5 Mini for vision analysis."""
+            photo = update.message.photo[-1]  # highest resolution
+            caption = update.message.caption or "Describe and analyze this image in detail."
+            chat_id = update.effective_chat.id
+
+            await update.message.chat.send_action(ChatAction.TYPING)
+
+            # Download image
+            file = await photo.get_file()
+            filepath = os.path.join(WORKSPACE, f"photo_{int(time.time())}.jpg")
+            await file.download_to_drive(filepath)
+
+            # Read and encode
+            with open(filepath, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+
+            try:
+                response = await asyncio.to_thread(adapter._analyze_image, b64, caption)
+
+                # Add to conversation history so main LLM has context
+                messages = adapter.get_or_create_session(chat_id)
+                messages.append({"role": "user", "content": f"[Sent an image] {caption}"})
+                messages.append({"role": "assistant", "content": response})
+
+                await adapter._send_response(update.message, response)
+            except Exception as e:
+                await update.message.reply_text(f"Error analyzing image: {e}")
+
+        async def _on_document(update: Update, context):
+            """Handle documents — extract text, pass to LLM for analysis."""
+            doc = update.message.document
+            caption = update.message.caption or ""
+            chat_id = update.effective_chat.id
+            filename = doc.file_name or "unknown"
+
+            await update.message.chat.send_action(ChatAction.TYPING)
+
+            # Download to workspace
+            filepath = os.path.join(WORKSPACE, filename)
+            file = await doc.get_file()
+            await file.download_to_drive(filepath)
+
+            # Check if it's an image sent as document
+            ext = os.path.splitext(filename)[1].lower()
+            if ext in ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'):
+                with open(filepath, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode()
+                try:
+                    prompt = caption or "Describe and analyze this image in detail."
+                    response = await asyncio.to_thread(adapter._analyze_image, b64, prompt)
+                    messages = adapter.get_or_create_session(chat_id)
+                    messages.append({"role": "user", "content": f"[Sent image: {filename}] {prompt}"})
+                    messages.append({"role": "assistant", "content": response})
+                    await adapter._send_response(update.message, response)
+                except Exception as e:
+                    await update.message.reply_text(f"Error analyzing image: {e}")
+                return
+
+            # Extract text content
+            text_content = await asyncio.to_thread(_extract_text, filepath)
+
+            if not text_content:
+                await update.message.reply_text(
+                    f"Saved <code>{html_mod.escape(filename)}</code> to workspace, "
+                    "but couldn't extract text from this format.",
+                    parse_mode="HTML",
+                )
+                return
+
+            # Truncate if very long
+            if len(text_content) > 15000:
+                text_content = text_content[:15000] + "\n\n[... truncated ...]"
+
+            prompt = (
+                f"The user sent a file: **{filename}**\n\n"
+                f"File content:\n```\n{text_content}\n```\n\n"
+                f"{caption or 'Please analyze this document and provide a summary.'}"
+            )
+
+            bot = context.bot
+            try:
+                response = await adapter.handle_message_streaming(chat_id, prompt, bot)
+                await adapter._send_response(update.message, response)
+            except Exception as e:
+                await update.message.reply_text(f"Error: {e}")
+
+        # ── Command handlers ───────────────────────────────────────
+
         async def _on_start(update: Update, context):
             model = html_mod.escape(adapter.client.MODEL)
             await update.message.reply_text(
                 f"<b>shellm</b>  <code>{model}</code>\n\n"
                 "I'm an AI assistant with web search, shell access, "
                 "persistent memory, and more.\n\n"
-                "Just send a message to chat, or use /help for commands.",
+                "Send me text, images, or documents — or use /help for commands.",
                 parse_mode="HTML",
             )
 
@@ -154,11 +304,16 @@ class TelegramAdapter:
                 "• /memory — Read shared memory\n"
                 "• /remember <code>&lt;text&gt;</code> — Save to memory\n"
                 "• /recall <code>&lt;keyword&gt;</code> — Search memory\n"
+                "• /files — List workspace files\n"
+                "• /download <code>&lt;filename&gt;</code> — Get a file from workspace\n"
                 "• /logs — Recent chat history\n"
                 "• /model — Current engine info\n"
                 "• /clear — Reset conversation\n"
                 "• /forget — Clear conversation history\n"
-                "• /help — Show this message",
+                "• /help — Show this message\n\n"
+                "<b>Media support</b>\n"
+                "• Send an <b>image</b> — analyzed by GPT-5 Mini (vision)\n"
+                "• Send a <b>document</b> (PDF, DOCX, CSV, code, etc.) — extracted and analyzed",
                 parse_mode="HTML",
             )
 
@@ -223,6 +378,41 @@ class TelegramAdapter:
                 result = result[:4000] + "\n\n[... truncated ...]"
             await update.message.reply_text(result)
 
+        async def _on_files(update: Update, context):
+            """List files in the workspace directory."""
+            try:
+                files = os.listdir(WORKSPACE)
+                if not files:
+                    await update.message.reply_text("Workspace is empty.")
+                    return
+                listing = "\n".join(f"• {f}" for f in sorted(files))
+                await update.message.reply_text(
+                    f"<b>Workspace files</b>\n\n{html_mod.escape(listing)}",
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                await update.message.reply_text(f"Error: {e}")
+
+        async def _on_download(update: Update, context):
+            """Send a file from workspace to the user."""
+            filename = " ".join(context.args) if context.args else ""
+            if not filename:
+                await update.message.reply_text(
+                    "Usage: /download <code>&lt;filename&gt;</code>", parse_mode="HTML"
+                )
+                return
+            filepath = os.path.join(WORKSPACE, filename)
+            if not os.path.isfile(filepath):
+                await update.message.reply_text(f"File not found: {filename}")
+                return
+            try:
+                await update.message.reply_document(
+                    document=open(filepath, "rb"),
+                    filename=filename,
+                )
+            except Exception as e:
+                await update.message.reply_text(f"Error sending file: {e}")
+
         async def _on_forget(update: Update, context):
             chat_id = update.effective_chat.id
             adapter.sessions.pop(chat_id, None)
@@ -237,6 +427,8 @@ class TelegramAdapter:
                 BotCommand("memory", "Read shared memory"),
                 BotCommand("remember", "Save something to memory"),
                 BotCommand("recall", "Search memory by keyword"),
+                BotCommand("files", "List workspace files"),
+                BotCommand("download", "Get a file from workspace"),
                 BotCommand("logs", "Show recent chat history"),
                 BotCommand("model", "Show current engine info"),
                 BotCommand("clear", "Reset conversation history"),
@@ -253,8 +445,12 @@ class TelegramAdapter:
         app.add_handler(CommandHandler("memory", _on_memory))
         app.add_handler(CommandHandler("remember", _on_remember))
         app.add_handler(CommandHandler("recall", _on_recall))
+        app.add_handler(CommandHandler("files", _on_files))
+        app.add_handler(CommandHandler("download", _on_download))
         app.add_handler(CommandHandler("logs", _on_logs))
         app.add_handler(CommandHandler("forget", _on_forget))
+        app.add_handler(MessageHandler(filters.PHOTO, _on_photo))
+        app.add_handler(MessageHandler(filters.Document.ALL, _on_document))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
 
         print(f"Telegram bot started with streaming (model: {self.client.MODEL})", flush=True)
