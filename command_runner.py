@@ -40,7 +40,7 @@ def is_blocked(command: str) -> str | None:
     return None
 
 
-def run_command(command: str, timeout: int = 60, auto_approve: bool = False) -> str:
+def run_command(command: str, timeout: int = 120, auto_approve: bool = False) -> str:
     """Execute a shell command after safety check and user confirmation.
 
     Args:

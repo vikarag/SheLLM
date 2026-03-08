@@ -295,6 +295,42 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "kimi_code",
+            "description": "Delegate a technical task to Kimi K2.5 (code engine with thinking mode). "
+                           "Use for: coding, debugging, installation, system administration, "
+                           "file editing, package management, server configuration, and any "
+                           "hands-on technical work. Kimi has full tool access (shell commands, "
+                           "file operations, etc.) and will execute the task autonomously.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "The technical task to delegate to Kimi"},
+                },
+                "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_file",
+            "description": "Send a file to the user via Telegram. Use this to deliver files you created "
+                           "(images, documents, scripts, etc.) directly in the chat. The file must exist "
+                           "in workspace/ or be an absolute path. For images (png/jpg/gif/webp), sends as "
+                           "a photo; otherwise sends as a document.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path — relative to workspace/ (e.g. 'st_kitts_flag.png') or absolute"},
+                    "caption": {"type": "string", "description": "Optional caption to send with the file"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "mcp_list_servers",
             "description": "List all configured MCP servers and their connection status.",
             "parameters": {"type": "object", "properties": {}},
@@ -486,12 +522,12 @@ class BaseChatClient:
                 from gpt5mini_chat import GPT5MiniChat
                 researcher = GPT5MiniChat()
                 researcher._silent = True
-                response = researcher.client.chat.completions.create(
+                response = researcher.client.responses.create(
                     model=researcher.MODEL,
-                    messages=[{"role": "user", "content": query}],
-                    tools=[{"type": "web_search_preview"}],
+                    input=query,
+                    tools=[{"type": "web_search"}],
                 )
-                result = response.choices[0].message.content or "(No results)"
+                result = response.output_text or "(No results)"
             except Exception as e:
                 result = f"Research error: {e}"
             self._print("[Research complete]")
@@ -558,6 +594,10 @@ class BaseChatClient:
             )
         elif name == "claude_code":
             return self._run_claude_code(args.get("prompt", ""), args.get("working_directory"))
+        elif name == "kimi_code":
+            return self._run_kimi_code(args.get("task", ""))
+        elif name == "send_file":
+            return self._send_file_telegram(args.get("path", ""), args.get("caption"))
         elif name == "mcp_list_servers":
             return MCPManager.get_instance().list_servers()
         elif name == "mcp_list_tools":
@@ -618,6 +658,103 @@ class BaseChatClient:
             return "Claude Code CLI not found. Install with: npm install -g @anthropic-ai/claude-code"
         except Exception as e:
             return f"Claude Code error: {e}"
+
+    def _run_kimi_code(self, task):
+        """Delegate a technical task to Kimi K2.5 with full tool access."""
+        if not task.strip():
+            return "No task provided."
+        self._print(f"[Kimi Code] Delegating: {task[:100]}...")
+        try:
+            from kimi_chat import KimiChat
+            kimi = KimiChat()
+            kimi._silent = True
+            kimi._mode = self._mode
+            kimi._current_chat_id = self._current_chat_id
+            messages = []
+            answer = kimi.process_prompt(task, messages)
+            self._print("[Kimi Code] Done.")
+            return answer or "(Kimi produced no output)"
+        except Exception as e:
+            return f"Kimi Code error: {e}"
+
+    def _send_file_telegram(self, path, caption=None):
+        """Send a file to the current Telegram chat."""
+        if not self._current_chat_id:
+            return "Cannot send file: not in Telegram mode."
+
+        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+        if not bot_token:
+            return "Cannot send file: TELEGRAM_BOT_TOKEN not set."
+
+        # Resolve path: relative to workspace/ or absolute
+        workspace = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace")
+        if os.path.isabs(path):
+            filepath = path
+        else:
+            filepath = os.path.join(workspace, path)
+
+        if not os.path.isfile(filepath):
+            return f"File not found: {path}"
+
+        ext = os.path.splitext(filepath)[1].lower()
+        is_image = ext in ('.png', '.jpg', '.jpeg', '.gif', '.webp')
+
+        try:
+            import urllib.request
+            import urllib.parse
+
+            if is_image:
+                url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+                field_name = "photo"
+            else:
+                url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+                field_name = "document"
+
+            # Build multipart form data
+            boundary = "----SheLLMFileBoundary"
+            body_parts = []
+
+            # chat_id field
+            body_parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{self._current_chat_id}")
+
+            # caption field
+            if caption:
+                body_parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n{caption}")
+
+            # file field
+            filename = os.path.basename(filepath)
+            with open(filepath, "rb") as f:
+                file_data = f.read()
+
+            file_header = (
+                f"--{boundary}\r\n"
+                f"Content-Disposition: form-data; name=\"{field_name}\"; filename=\"{filename}\"\r\n"
+                f"Content-Type: application/octet-stream\r\n\r\n"
+            )
+
+            # Assemble body
+            body = b""
+            for part in body_parts:
+                body += part.encode() + b"\r\n"
+            body += file_header.encode() + file_data + b"\r\n"
+            body += f"--{boundary}--\r\n".encode()
+
+            req = urllib.request.Request(
+                url,
+                data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                result = json.loads(resp.read())
+
+            if result.get("ok"):
+                return f"File sent successfully: {filename}"
+            else:
+                return f"Telegram API error: {result.get('description', 'unknown error')}"
+
+        except Exception as e:
+            return f"Error sending file: {e}"
 
     def handle_tool_calls(self, response_message, messages):
         messages.append(response_message)
@@ -721,8 +858,31 @@ class BaseChatClient:
             "additional tools. Use mcp_list_servers to see connected servers. "
             "You have a claude_code tool that delegates tasks to Claude Code (Anthropic's AI coding agent). "
             "IMPORTANT: Only use claude_code when the user explicitly asks to use Claude Code or Claude. "
-            "For all other coding tasks, use run_command and file tools directly.\n\n"
+            "For all other coding tasks, delegate to kimi_code (NOT run_command directly).\n\n"
+            "You have a kimi_code tool that delegates technical tasks to Kimi K2.5 (a code-specialized AI with "
+            "thinking/reasoning mode). AUTOMATICALLY delegate the following types of tasks to kimi_code:\n"
+            "- Writing, editing, or debugging code\n"
+            "- Installing packages or software (apt, pip, npm, etc.)\n"
+            "- System administration (services, configs, networking, Docker, etc.)\n"
+            "- File operations that require multiple steps\n"
+            "- Server setup and configuration\n"
+            "- Git operations and repository management\n"
+            "Do NOT ask the user for permission — just delegate technical tasks automatically. "
+            "After Kimi completes the task, summarize what was done for the user.\n\n"
+            "You have a send_file tool that sends files to the user via Telegram. "
+            "ALWAYS use send_file after creating or saving a file that the user requested "
+            "(images, documents, scripts, etc.) — do NOT just tell them the file path. "
+            "Send the file directly so they can view/download it in the chat.\n\n"
             "Proactively save useful information about the user to memory for future sessions.\n\n"
+            "TOOL STRATEGY: You have up to 20 tool calls per turn — use them wisely.\n"
+            "- When you don't know how to install, configure, or use something, use web_research FIRST "
+            "to find the correct commands, package names, and documentation. Do NOT guess commands blindly.\n"
+            "- web_research is powered by GPT-5 Mini with live web search — it can find package install "
+            "instructions, GitHub repos, API docs, and current information that you may not know.\n"
+            "- Plan your approach: research first (1-2 calls), then execute with confidence (remaining calls).\n"
+            "- For package installations (apt, pip, npm), always set timeout=300 in run_command.\n"
+            "- If a run_command fails, research the error with web_research before retrying.\n"
+            "- Prefer pip/apt install commands from official docs over cloning random repos.\n\n"
             "SELF-AWARENESS: Your own source code lives at ~/shellm/. You ARE SheLLM — "
             "when the user mentions 'your backend', 'your code', or 'your system', they mean YOUR files. "
             "Key files:\n"
@@ -782,7 +942,7 @@ class BaseChatClient:
             response = self.client.chat.completions.create(**self.build_params(messages))
             answer = None
 
-            for _ in range(10):
+            for _ in range(20):
                 if self.STREAM:
                     answer, tool_data = self.handle_stream(response)
                     if tool_data:
@@ -831,6 +991,8 @@ class BaseChatClient:
             if not answer and self._current_tool_calls:
                 tool_errors = []
                 for msg in messages:
+                    if not isinstance(msg, dict):
+                        continue
                     if msg.get("role") == "tool":
                         content = msg.get("content", "")
                         if any(kw in content for kw in (
@@ -849,6 +1011,7 @@ class BaseChatClient:
                     for err in tool_errors[-3:]:
                         lines.append(f"  >> {err}")
                 answer = "\n".join(lines)
+                answer += "\n\nPlease retry or refine your request. I'll continue from where I left off."
 
             if answer:
                 messages.append({"role": "assistant", "content": answer})

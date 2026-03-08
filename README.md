@@ -84,7 +84,7 @@ if __name__ == "__main__":
 
 Override `build_params()` for custom behavior (see `deepseek_chat.py` and `kimi_chat.py` for examples).
 
-## Built-in Tools (24)
+## Built-in Tools (26)
 
 Every engine gets all of these automatically:
 
@@ -112,10 +112,16 @@ Every engine gets all of these automatically:
 | `memory_delete` | Delete a memory entry |
 | `chat_log_read` | Query past conversations across all engines |
 | `claude_code` | Delegate complex coding tasks to Claude Code (AI coding agent) |
+| `kimi_code` | Auto-delegate technical tasks to Kimi K2.5 (coding, sysadmin, installs) |
+| `send_file` | Send files (images, documents) to the user via Telegram |
 | `mcp_list_servers` | List configured MCP servers and connection status |
 | `mcp_list_tools` | List tools available from MCP servers |
 
-The model decides when to use them. Up to 10 tool-call rounds per turn.
+The model decides when to use them. Up to 20 tool-call rounds per turn.
+
+### Auto-Delegation
+
+The Chat engine (DeepSeek) automatically delegates technical tasks to the Code engine (Kimi K2.5) via the `kimi_code` tool. This includes coding, debugging, package installation, system administration, and server configuration. No manual switching needed — DeepSeek recognizes technical work and routes it to Kimi autonomously.
 
 ## MCP Server Support
 
@@ -147,7 +153,9 @@ SheLLM runs natively as a Telegram bot with real-time streaming, HTML-formatted 
 ./deepseek_chat.py --telegram
 ```
 
-**Bot commands:** `/search`, `/memory`, `/remember`, `/recall`, `/logs`, `/model`, `/clear`, `/forget`, `/help`
+**Bot commands:** `/search`, `/plan`, `/memory`, `/remember`, `/recall`, `/usage`, `/files`, `/download`, `/logs`, `/model`, `/clear`, `/forget`, `/help`
+
+The `/plan` command lets you preview an execution plan before running a task. Send `/plan <task>` and the bot presents the steps, tools, and delegation strategy. Reply **yes** to execute, **no** to cancel, or send feedback to revise the plan.
 
 Responses are automatically converted from Markdown to Telegram HTML with proper code blocks, bold, italic, links, and blockquotes.
 
@@ -194,8 +202,10 @@ The LLM can read its own past logs via the `chat_log_read` tool.
 ## Architecture
 
 ```
-BaseChatClient (base_chat.py, ~700 loc)
-  |-- 24 built-in tools + MCP dynamic tools
+BaseChatClient (base_chat.py, ~1000 loc)
+  |-- 26 built-in tools + MCP dynamic tools
+  |-- Auto-delegation: DeepSeek → Kimi K2.5 for technical tasks
+  |-- File delivery: send_file for Telegram media/document sending
   |-- Streaming + batch response handling
   |-- Optional reasoning/thinking display
   |-- Self-aware system prompt (knows its own codebase)

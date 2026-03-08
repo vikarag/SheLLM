@@ -170,6 +170,7 @@ class TelegramAdapter:
         self.client._mode = "telegram"
         self.bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
         self.sessions = {}  # chat_id -> messages list
+        self._pending_plans = {}  # chat_id -> original prompt awaiting confirmation
         self._load_sessions()
 
         # Vision engine (GPT-5 Mini) for image analysis
@@ -281,6 +282,54 @@ class TelegramAdapter:
             if not text:
                 return
             bot = context.bot
+
+            # Check if there's a pending plan awaiting confirmation
+            if chat_id in adapter._pending_plans:
+                lower = text.lower().strip()
+                cancel_words = ("no", "cancel", "취소", "아니", "stop", "nope")
+                confirm_words = ("yes", "y", "go", "ok", "okay", "proceed", "do it",
+                                 "execute", "run", "확인", "실행", "ㅇㅇ", "응", "네", "좋아", "해줘", "고")
+
+                if any(lower.startswith(w) for w in cancel_words):
+                    del adapter._pending_plans[chat_id]
+                    await update.message.reply_text("Plan cancelled.")
+                    return
+                elif any(lower.startswith(w) for w in confirm_words):
+                    original_prompt = adapter._pending_plans.pop(chat_id)
+                    await update.message.chat.send_action(ChatAction.TYPING)
+                    try:
+                        response = await adapter.handle_message_streaming(
+                            chat_id, original_prompt, bot
+                        )
+                        await adapter._send_response(update.message, response)
+                    except Exception as e:
+                        await update.message.reply_text(f"Error: {e}")
+                    return
+                else:
+                    # Treat as feedback — regenerate plan with the feedback
+                    original_prompt = adapter._pending_plans[chat_id]
+                    feedback_prompt = (
+                        f"The user gave feedback on your previous plan. "
+                        f"Original task: {original_prompt}\n\n"
+                        f"User feedback: {text}\n\n"
+                        "Create a REVISED execution plan incorporating this feedback. "
+                        "Do NOT execute anything yet — only present the updated plan. "
+                        "End with: 'Reply **yes** to execute, **no** to cancel, or provide more feedback.'"
+                    )
+                    await update.message.chat.send_action(ChatAction.TYPING)
+                    try:
+                        loop = asyncio.get_event_loop()
+                        plan_messages = []
+                        adapter.client._ensure_system_message(plan_messages)
+                        response = await loop.run_in_executor(
+                            None, lambda: adapter.client.process_prompt(feedback_prompt, plan_messages)
+                        )
+                        # Keep the pending plan (updated prompt stays the same)
+                        await adapter._send_response(update.message, response or "(No plan generated)")
+                    except Exception as e:
+                        await update.message.reply_text(f"Error: {e}")
+                    return
+
             await update.message.chat.send_action(ChatAction.TYPING)
             try:
                 response = await adapter.handle_message_streaming(chat_id, text, bot)
@@ -400,6 +449,7 @@ class TelegramAdapter:
                 "• /usage — API balances and usage stats\n"
                 "• /files — List workspace files\n"
                 "• /download <code>&lt;filename&gt;</code> — Get a file from workspace\n"
+                "• /plan <code>&lt;task&gt;</code> — Plan before executing (confirm/revise/cancel)\n"
                 "• /logs — Recent chat history\n"
                 "• /model — Current engine info\n"
                 "• /clear — Reset conversation\n"
@@ -412,10 +462,12 @@ class TelegramAdapter:
             )
 
         async def _on_clear(update: Update, context):
+            import sys
             chat_id = update.effective_chat.id
             adapter.sessions.pop(chat_id, None)
             adapter._save_sessions()
-            await update.message.reply_text("Conversation cleared.")
+            await update.message.reply_text("Conversation cleared. Restarting bot...")
+            os.execv(sys.executable, [sys.executable] + sys.argv)
 
         async def _on_model(update: Update, context):
             await update.message.reply_text(adapter.client.format_banner())
@@ -527,6 +579,41 @@ class TelegramAdapter:
                 "Note: shared memory is preserved (use the LLM to delete specific entries)."
             )
 
+        async def _on_plan(update: Update, context):
+            """Present an execution plan before running a task."""
+            prompt = " ".join(context.args) if context.args else ""
+            if not prompt:
+                await update.message.reply_text(
+                    "Usage: /plan <code>&lt;task description&gt;</code>", parse_mode="HTML"
+                )
+                return
+            chat_id = update.effective_chat.id
+            await update.message.chat.send_action(ChatAction.TYPING)
+
+            plan_prompt = (
+                f"The user wants you to plan (but NOT execute) the following task:\n\n"
+                f"{prompt}\n\n"
+                "Create a detailed execution plan that includes:\n"
+                "1. **Steps** — numbered list of what you'll do\n"
+                "2. **Tools** — which tools/delegations you'll use (kimi_code, web_research, run_command, etc.)\n"
+                "3. **Delegation** — which subtasks go to Kimi K2.5 vs handled directly\n"
+                "4. **Estimated complexity** — simple / moderate / complex\n\n"
+                "Do NOT execute anything. Only present the plan.\n"
+                "End with: 'Reply **yes** to execute, **no** to cancel, or provide feedback to adjust the plan.'"
+            )
+
+            try:
+                loop = asyncio.get_event_loop()
+                plan_messages = []
+                adapter.client._ensure_system_message(plan_messages)
+                response = await loop.run_in_executor(
+                    None, lambda: adapter.client.process_prompt(plan_prompt, plan_messages)
+                )
+                adapter._pending_plans[chat_id] = prompt
+                await adapter._send_response(update.message, response or "(No plan generated)")
+            except Exception as e:
+                await update.message.reply_text(f"Error: {e}")
+
         async def _post_init(app):
             await app.bot.set_my_commands([
                 BotCommand("search", "Research a topic with web search"),
@@ -536,6 +623,7 @@ class TelegramAdapter:
                 BotCommand("usage", "API balances and usage stats"),
                 BotCommand("files", "List workspace files"),
                 BotCommand("download", "Get a file from workspace"),
+                BotCommand("plan", "Plan before executing a task"),
                 BotCommand("logs", "Show recent chat history"),
                 BotCommand("model", "Show current engine info"),
                 BotCommand("clear", "Reset conversation history"),
@@ -552,6 +640,7 @@ class TelegramAdapter:
         app.add_handler(CommandHandler("memory", _on_memory))
         app.add_handler(CommandHandler("remember", _on_remember))
         app.add_handler(CommandHandler("recall", _on_recall))
+        app.add_handler(CommandHandler("plan", _on_plan))
         app.add_handler(CommandHandler("usage", _on_usage))
         app.add_handler(CommandHandler("files", _on_files))
         app.add_handler(CommandHandler("download", _on_download))
