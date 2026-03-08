@@ -40,12 +40,13 @@ def is_blocked(command: str) -> str | None:
     return None
 
 
-def run_command(command: str, timeout: int = 60) -> str:
+def run_command(command: str, timeout: int = 60, auto_approve: bool = False) -> str:
     """Execute a shell command after safety check and user confirmation.
 
     Args:
         command: Shell command to execute
         timeout: Max execution time in seconds (default 60)
+        auto_approve: Skip confirmation prompt (for non-interactive modes like Telegram)
 
     Returns:
         Command output (stdout + stderr) or error message
@@ -55,21 +56,22 @@ def run_command(command: str, timeout: int = 60) -> str:
     if blocked:
         return f"BLOCKED: This command matches a dangerous pattern and cannot be executed.\nBlocked pattern: {blocked}"
 
-    # User confirmation
-    print(f"\n{'='*60}")
-    print(f"COMMAND EXECUTION REQUEST")
-    print(f"{'='*60}")
-    print(f"  $ {command}")
-    print(f"  Timeout: {timeout}s")
-    print(f"{'='*60}")
+    if not auto_approve:
+        # User confirmation (interactive mode only)
+        print(f"\n{'='*60}")
+        print(f"COMMAND EXECUTION REQUEST")
+        print(f"{'='*60}")
+        print(f"  $ {command}")
+        print(f"  Timeout: {timeout}s")
+        print(f"{'='*60}")
 
-    try:
-        confirm = input("Execute this command? [y/N]: ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        return "Cancelled by user."
+        try:
+            confirm = input("Execute this command? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return "Cancelled by user."
 
-    if confirm != "y":
-        return "Command execution cancelled by user."
+        if confirm != "y":
+            return "Command execution cancelled by user."
 
     try:
         result = subprocess.run(

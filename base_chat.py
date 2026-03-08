@@ -484,7 +484,11 @@ class BaseChatClient:
             self._print(result_text)
             return result_text
         elif name == "run_command":
-            result_text = run_command(args.get("command", ""), timeout=args.get("timeout", 60))
+            result_text = run_command(
+                args.get("command", ""),
+                timeout=args.get("timeout", 60),
+                auto_approve=(self._mode != "interactive"),
+            )
             self._print(result_text)
             return result_text
         elif name == "memory_read":
