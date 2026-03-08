@@ -4,12 +4,15 @@
 import asyncio
 import base64
 import html as html_mod
+import json
 import os
 import time
+import urllib.request
 
 from telegram_format import md_to_tg_html, split_message
 
 WORKSPACE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace")
+CHAT_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_logs.json")
 
 
 def _extract_text(filepath):
@@ -51,6 +54,97 @@ def _extract_text(filepath):
             return f.read()
     except Exception:
         return None
+
+
+def _fetch_usage():
+    """Fetch API balance from providers and local usage stats."""
+    from datetime import datetime
+
+    lines = ["<b>API Balances</b>\n"]
+
+    # DeepSeek balance
+    ds_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if ds_key:
+        try:
+            req = urllib.request.Request(
+                "https://api.deepseek.com/user/balance",
+                headers={"Authorization": f"Bearer {ds_key}"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+            if data.get("is_available"):
+                for info in data.get("balance_infos", []):
+                    currency = info.get("currency", "USD")
+                    total = info.get("total_balance", "?")
+                    granted = info.get("granted_balance", "0")
+                    lines.append(f"• <b>DeepSeek</b> (Chat): ${total} remaining")
+                    if float(granted) > 0:
+                        lines.append(f"  (granted: ${granted})")
+            else:
+                lines.append("• <b>DeepSeek</b>: Account unavailable")
+        except Exception as e:
+            lines.append(f"• <b>DeepSeek</b>: Error — {e}")
+
+    # Moonshot/Kimi balance
+    ms_key = os.environ.get("MOONSHOT_API_KEY", "")
+    if ms_key:
+        try:
+            req = urllib.request.Request(
+                "https://api.moonshot.ai/v1/users/me/balance",
+                headers={"Authorization": f"Bearer {ms_key}"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+            bal = data.get("data", {})
+            available = bal.get("available_balance", "?")
+            cash = bal.get("cash_balance", 0)
+            voucher = bal.get("voucher_balance", 0)
+            lines.append(f"• <b>Kimi K2.5</b> (Code): ¥{available}")
+            if cash or voucher:
+                lines.append(f"  (cash: ¥{cash}, voucher: ¥{voucher})")
+        except Exception as e:
+            lines.append(f"• <b>Kimi K2.5</b>: Error — {e}")
+
+    # OpenAI — no balance API for standard keys
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if openai_key:
+        lines.append(
+            '• <b>GPT-5 Mini</b> (Research): '
+            '<a href="https://platform.openai.com/usage">Check dashboard</a>'
+        )
+
+    # Local usage stats from chat logs
+    lines.append("\n<b>Usage Stats</b>\n")
+    try:
+        if os.path.exists(CHAT_LOG_FILE):
+            with open(CHAT_LOG_FILE) as f:
+                logs = json.load(f)
+
+            today = datetime.now().strftime("%Y-%m-%d")
+            model_stats = {}
+            for entry in logs:
+                model = entry.get("model", "unknown")
+                if model not in model_stats:
+                    model_stats[model] = {"total": 0, "today": 0, "total_ms": 0}
+                model_stats[model]["total"] += 1
+                model_stats[model]["total_ms"] += entry.get("duration_ms", 0)
+                if entry.get("timestamp", "").startswith(today):
+                    model_stats[model]["today"] += 1
+
+            for model, s in sorted(model_stats.items()):
+                avg = s["total_ms"] / s["total"] / 1000 if s["total"] else 0
+                lines.append(
+                    f"• <code>{model}</code>: "
+                    f"{s['total']} total, {s['today']} today, "
+                    f"avg {avg:.1f}s"
+                )
+            lines.append(f"\n<i>Total: {len(logs)} interactions logged</i>")
+        else:
+            lines.append("No chat logs yet.")
+    except Exception as e:
+        lines.append(f"Error reading logs: {e}")
+
+    return "\n".join(lines)
 
 
 class TelegramAdapter:
@@ -159,7 +253,7 @@ class TelegramAdapter:
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_data}"}},
                 ],
             }],
-            max_tokens=2000,
+            max_completion_tokens=2000,
         )
         return response.choices[0].message.content or "(No response)"
 
@@ -304,6 +398,7 @@ class TelegramAdapter:
                 "• /memory — Read shared memory\n"
                 "• /remember <code>&lt;text&gt;</code> — Save to memory\n"
                 "• /recall <code>&lt;keyword&gt;</code> — Search memory\n"
+                "• /usage — API balances and usage stats\n"
                 "• /files — List workspace files\n"
                 "• /download <code>&lt;filename&gt;</code> — Get a file from workspace\n"
                 "• /logs — Recent chat history\n"
@@ -413,6 +508,12 @@ class TelegramAdapter:
             except Exception as e:
                 await update.message.reply_text(f"Error sending file: {e}")
 
+        async def _on_usage(update: Update, context):
+            """Show API balances and local usage stats."""
+            await update.message.chat.send_action(ChatAction.TYPING)
+            result = await asyncio.to_thread(_fetch_usage)
+            await update.message.reply_text(result, parse_mode="HTML")
+
         async def _on_forget(update: Update, context):
             chat_id = update.effective_chat.id
             adapter.sessions.pop(chat_id, None)
@@ -427,6 +528,7 @@ class TelegramAdapter:
                 BotCommand("memory", "Read shared memory"),
                 BotCommand("remember", "Save something to memory"),
                 BotCommand("recall", "Search memory by keyword"),
+                BotCommand("usage", "API balances and usage stats"),
                 BotCommand("files", "List workspace files"),
                 BotCommand("download", "Get a file from workspace"),
                 BotCommand("logs", "Show recent chat history"),
@@ -445,6 +547,7 @@ class TelegramAdapter:
         app.add_handler(CommandHandler("memory", _on_memory))
         app.add_handler(CommandHandler("remember", _on_remember))
         app.add_handler(CommandHandler("recall", _on_recall))
+        app.add_handler(CommandHandler("usage", _on_usage))
         app.add_handler(CommandHandler("files", _on_files))
         app.add_handler(CommandHandler("download", _on_download))
         app.add_handler(CommandHandler("logs", _on_logs))
