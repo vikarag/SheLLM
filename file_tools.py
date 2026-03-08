@@ -1,4 +1,4 @@
-"""File tools for shellm — read, write, list, and search files within workspace/."""
+"""File tools for SheLLM — read, write, list, and search files within workspace/."""
 
 import os
 import re

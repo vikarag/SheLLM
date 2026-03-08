@@ -424,7 +424,7 @@ class TelegramAdapter:
         async def _on_start(update: Update, context):
             model = html_mod.escape(adapter.client.MODEL)
             await update.message.reply_text(
-                f"<b>shellm</b>  <code>{model}</code>\n\n"
+                f"<b>SheLLM</b>  <code>{model}</code>\n\n"
                 "I'm an AI assistant with web search, shell access, "
                 "persistent memory, and more.\n\n"
                 "Send me text, images, or documents — or use /help for commands.",

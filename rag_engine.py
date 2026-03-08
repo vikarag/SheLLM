@@ -1,4 +1,4 @@
-"""RAG engine for shellm — index, search, list, and delete documents with hybrid search.
+"""RAG engine for SheLLM — index, search, list, and delete documents with hybrid search.
 
 Uses SQLite for storage with FTS5 for keyword matching combined with
 cosine similarity on embeddings for hybrid semantic+keyword search.

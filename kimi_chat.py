@@ -1,5 +1,5 @@
 #!/home/gslee/llm-api-vault/venv/bin/python3
-"""shellm Code Engine -- Kimi K2.5 for code generation, analysis, and refactoring."""
+"""SheLLM Code Engine -- Kimi K2.5 for code generation, analysis, and refactoring."""
 
 from base_chat import BaseChatClient
 
@@ -10,7 +10,7 @@ THINKING = True   # True = thinking mode (CoT), False = instant mode
 
 class KimiChat(BaseChatClient):
     MODEL = "kimi-k2.5"
-    BANNER_NAME = "shellm Code"
+    BANNER_NAME = "SheLLM Code"
     ENV_VAR = "MOONSHOT_API_KEY"
     BASE_URL = "https://api.moonshot.ai/v1"
     STREAM = True

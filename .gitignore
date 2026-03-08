@@ -25,7 +25,7 @@ shellm.db
 shellm.db-wal
 shellm.db-shm
 
-# Workspace (shellm project files)
+# Workspace (SheLLM project files)
 workspace/
 
 # MCP server config (may contain local paths)

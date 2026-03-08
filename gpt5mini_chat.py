@@ -1,12 +1,12 @@
 #!/home/gslee/llm-api-vault/venv/bin/python3
-"""shellm Research Engine -- GPT-5 Mini for web research, summarization, and fact-finding."""
+"""SheLLM Research Engine -- GPT-5 Mini for web research, summarization, and fact-finding."""
 
 from base_chat import BaseChatClient
 
 
 class GPT5MiniChat(BaseChatClient):
     MODEL = "gpt-5-mini"
-    BANNER_NAME = "shellm Research"
+    BANNER_NAME = "SheLLM Research"
     ENV_VAR = "OPENAI_API_KEY"
     STREAM = True
     TEMPERATURE = None

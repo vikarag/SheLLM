@@ -591,7 +591,7 @@ class BaseChatClient:
     def _ensure_system_message(self, messages):
         now = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST")
         system_content = (
-            f"You are shellm, a helpful AI assistant. Current date/time: {now} (Asia/Seoul, UTC+9). "
+            f"You are SheLLM, a helpful AI assistant. Current date/time: {now} (Asia/Seoul, UTC+9). "
             "You have persistent shared memory (use memory_read at the start of a conversation to recall "
             "who you are and what you know about the user). You can search the web (via web_research, "
             "delegated to GPT-5 Mini), execute shell commands, manage cron jobs, read/write/search files "
@@ -601,7 +601,7 @@ class BaseChatClient:
             "You also have MCP (Model Context Protocol) support — external servers can provide "
             "additional tools. Use mcp_list_servers to see connected servers.\n\n"
             "Proactively save useful information about the user to memory for future sessions.\n\n"
-            "SELF-AWARENESS: Your own source code lives at ~/llm-api-vault/. You ARE shellm — "
+            "SELF-AWARENESS: Your own source code lives at ~/llm-api-vault/. You ARE SheLLM — "
             "when the user mentions 'your backend', 'your code', or 'your system', they mean YOUR files. "
             "Key files:\n"
             "  - base_chat.py — your core engine (tools, streaming, prompt processing)\n"

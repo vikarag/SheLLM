@@ -1,8 +1,8 @@
-"""MCP (Model Context Protocol) manager for shellm.
+"""MCP (Model Context Protocol) manager for SheLLM.
 
 Manages connections to external MCP servers, discovers their tools,
 and routes tool calls. Uses a dedicated daemon thread with its own
-asyncio event loop to bridge shellm's sync code with the async MCP SDK.
+asyncio event loop to bridge SheLLM's sync code with the async MCP SDK.
 """
 
 import asyncio

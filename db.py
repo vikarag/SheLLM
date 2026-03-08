@@ -1,4 +1,4 @@
-"""Shared SQLite database module for shellm memory and RAG.
+"""Shared SQLite database module for SheLLM memory and RAG.
 
 Provides thread-local connections (critical for Telegram's asyncio.to_thread()),
 WAL mode for concurrent reads, and idempotent schema creation.
