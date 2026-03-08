@@ -303,8 +303,14 @@ class TelegramAdapter:
                         f"[PLAN EXECUTION MODE]\n"
                         f"You are executing an approved plan. Here is the plan:\n\n"
                         f"{plan_text}\n\n"
-                        f"IMPORTANT: After completing each major step, call the report_progress tool "
-                        f"with the step number, total steps, title, and what was accomplished.\n\n"
+                        f"EXECUTION GUIDELINES:\n"
+                        f"1. After completing each major step, call the report_progress tool "
+                        f"with the step number, total steps, title, and what was accomplished.\n"
+                        f"2. Actively use web_research (GPT-5 Mini) for any research, data gathering, "
+                        f"fact-checking, or finding resources/documentation needed during execution.\n"
+                        f"3. Delegate coding, technical implementation, and file generation tasks "
+                        f"to kimi_code (Kimi K2.5) for higher quality results.\n"
+                        f"4. Combine both: research with web_research first, then implement with kimi_code.\n\n"
                         f"Now execute: {original_prompt}"
                     )
 

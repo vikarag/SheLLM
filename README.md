@@ -166,6 +166,8 @@ The `/plan` command lets you preview an execution plan before running a task:
 
 During execution, the LLM calls `report_progress` after each major step. A background thread sends the step info to GPT-5 Nano, which summarizes it in 1-2 sentences and delivers a Telegram notification — so you get real-time visibility into multi-step plans without blocking execution.
 
+Plan mode also maximizes engine utilization: the Chat engine (DeepSeek) orchestrates the plan while automatically delegating research and data gathering to GPT-5 Mini (`web_research`) and coding/implementation tasks to Kimi K2.5 (`kimi_code`). This multi-engine approach produces higher quality results than any single model alone.
+
 ```
 You:  /plan install htop and verify it works
 Bot:  [Plan with steps, tools, complexity]
