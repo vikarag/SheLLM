@@ -84,7 +84,7 @@ if __name__ == "__main__":
 
 Override `build_params()` for custom behavior (see `deepseek_chat.py` and `kimi_chat.py` for examples).
 
-## Built-in Tools (26)
+## Built-in Tools (27)
 
 Every engine gets all of these automatically:
 
@@ -114,6 +114,7 @@ Every engine gets all of these automatically:
 | `claude_code` | Delegate complex coding tasks to Claude Code (AI coding agent) |
 | `kimi_code` | Auto-delegate technical tasks to Kimi K2.5 (coding, sysadmin, installs) |
 | `send_file` | Send files (images, documents) to the user via Telegram |
+| `report_progress` | Send real-time progress updates during plan execution (via GPT-5 Nano) |
 | `mcp_list_servers` | List configured MCP servers and connection status |
 | `mcp_list_tools` | List tools available from MCP servers |
 
@@ -155,7 +156,26 @@ SheLLM runs natively as a Telegram bot with real-time streaming, HTML-formatted 
 
 **Bot commands:** `/search`, `/plan`, `/memory`, `/remember`, `/recall`, `/usage`, `/files`, `/download`, `/logs`, `/model`, `/clear`, `/forget`, `/help`
 
-The `/plan` command lets you preview an execution plan before running a task. Send `/plan <task>` and the bot presents the steps, tools, and delegation strategy. Reply **yes** to execute, **no** to cancel, or send feedback to revise the plan.
+### Plan Mode
+
+The `/plan` command lets you preview an execution plan before running a task:
+
+1. Send `/plan <task>` — the bot generates a step-by-step plan with tools and delegation strategy
+2. Reply **yes** to execute, **no** to cancel, or send feedback to revise the plan
+3. Feedback is iterative — keep refining until the plan looks right, then approve
+
+During execution, the LLM calls `report_progress` after each major step. A background thread sends the step info to GPT-5 Nano, which summarizes it in 1-2 sentences and delivers a Telegram notification — so you get real-time visibility into multi-step plans without blocking execution.
+
+```
+You:  /plan install htop and verify it works
+Bot:  [Plan with steps, tools, complexity]
+You:  yes
+Bot:  [Plan Progress 1/3] ✓ Installed htop via apt-get...
+Bot:  [Plan Progress 2/3] ✓ Verified htop runs and displays process list...
+Bot:  [Final response with full results]
+```
+
+Progress updates are best-effort — if the summarization or Telegram delivery fails, execution continues unaffected. In CLI mode, `report_progress` is a silent no-op.
 
 Responses are automatically converted from Markdown to Telegram HTML with proper code blocks, bold, italic, links, and blockquotes.
 
@@ -203,7 +223,7 @@ The LLM can read its own past logs via the `chat_log_read` tool.
 
 ```
 BaseChatClient (base_chat.py, ~1000 loc)
-  |-- 26 built-in tools + MCP dynamic tools
+  |-- 27 built-in tools + MCP dynamic tools
   |-- Auto-delegation: DeepSeek → Kimi K2.5 for technical tasks
   |-- File delivery: send_file for Telegram media/document sending
   |-- Streaming + batch response handling
@@ -228,7 +248,8 @@ Modules:
 Engines: 15-50 lines each
   |-- deepseek_chat.py   Chat    (DeepSeek, +reasoner conditional logic)
   |-- kimi_chat.py       Code    (Kimi K2.5, +thinking mode toggle)
-  +-- gpt5mini_chat.py   Research (GPT-5 Mini, config only + web search delegate)
+  |-- gpt5mini_chat.py   Research (GPT-5 Mini, config only + web search delegate)
+  +-- gpt5nano_chat.py   Background (GPT-5 Nano, plan progress summarization)
 
 SheLLM.db    -- single SQLite database for memory + RAG (WAL mode)
 workspace/   -- SheLLM's project directory for file output
