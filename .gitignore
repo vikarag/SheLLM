@@ -12,11 +12,18 @@ __pycache__/
 
 # Shared memory, chat logs, sessions (personal data)
 memory.json
+memory.json.bak
 chat_logs.json
 telegram_sessions.json
 
-# RAG store (embeddings and indexed documents)
+# RAG store (legacy, migrated to SQLite)
 rag_store/
+rag_store.bak/
+
+# SQLite database
+shellm.db
+shellm.db-wal
+shellm.db-shm
 
 # Workspace (shellm project files)
 workspace/

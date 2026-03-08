@@ -1,16 +1,20 @@
-"""RAG engine for shellm — index, search, list, and delete documents with embeddings."""
+"""RAG engine for shellm — index, search, list, and delete documents with hybrid search.
+
+Uses SQLite for storage with FTS5 for keyword matching combined with
+cosine similarity on embeddings for hybrid semantic+keyword search.
+"""
 
 import json
 import os
+import re
 import time
 
 import numpy as np
 from openai import OpenAI
 
-RAG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rag_store")
-INDEX_FILE = os.path.join(RAG_DIR, "index.json")
-CHUNKS_FILE = os.path.join(RAG_DIR, "chunks.json")
-EMBEDDINGS_FILE = os.path.join(RAG_DIR, "embeddings.npy")
+from db import get_connection
+
+_RAG_STORE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rag_store")
 
 EMBED_MODEL = "text-embedding-3-small"
 EMBED_DIM = 1536
@@ -27,45 +31,47 @@ def _get_client():
     return _client
 
 
-def _ensure_dir():
-    os.makedirs(RAG_DIR, exist_ok=True)
+def _migrate_from_rag_store():
+    """One-time migration from rag_store/ directory to SQLite."""
+    if not os.path.isdir(_RAG_STORE_DIR):
+        return
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM rag_docs").fetchone()[0]
+    if count > 0:
+        return
 
+    index_file = os.path.join(_RAG_STORE_DIR, "index.json")
+    chunks_file = os.path.join(_RAG_STORE_DIR, "chunks.json")
+    embeddings_file = os.path.join(_RAG_STORE_DIR, "embeddings.npy")
 
-def _load_index():
-    if os.path.exists(INDEX_FILE):
-        with open(INDEX_FILE) as f:
-            return json.load(f)
-    return []
+    if not os.path.exists(index_file):
+        return
 
+    try:
+        with open(index_file) as f:
+            index = json.load(f)
+        with open(chunks_file) as f:
+            chunks = json.load(f)
+        embeddings = np.load(embeddings_file) if os.path.exists(embeddings_file) else np.empty((0, EMBED_DIM), dtype=np.float32)
 
-def _save_index(index):
-    _ensure_dir()
-    with open(INDEX_FILE, "w") as f:
-        json.dump(index, f, ensure_ascii=False, indent=2)
+        for doc in index:
+            conn.execute(
+                "INSERT INTO rag_docs (doc_id, filename, chunk_count, timestamp, tags) VALUES (?, ?, ?, ?, ?)",
+                (doc["doc_id"], doc["filename"], doc["chunk_count"], doc["timestamp"],
+                 json.dumps(doc.get("tags", []), ensure_ascii=False)),
+            )
 
+        for i, chunk in enumerate(chunks):
+            emb_blob = embeddings[i].tobytes() if i < len(embeddings) else np.zeros(EMBED_DIM, dtype=np.float32).tobytes()
+            conn.execute(
+                "INSERT INTO rag_chunks (doc_id, chunk_index, text, embedding) VALUES (?, ?, ?, ?)",
+                (chunk["doc_id"], chunk["chunk_index"], chunk["text"], emb_blob),
+            )
 
-def _load_chunks():
-    if os.path.exists(CHUNKS_FILE):
-        with open(CHUNKS_FILE) as f:
-            return json.load(f)
-    return []
-
-
-def _save_chunks(chunks):
-    _ensure_dir()
-    with open(CHUNKS_FILE, "w") as f:
-        json.dump(chunks, f, ensure_ascii=False, indent=2)
-
-
-def _load_embeddings():
-    if os.path.exists(EMBEDDINGS_FILE):
-        return np.load(EMBEDDINGS_FILE)
-    return np.empty((0, EMBED_DIM), dtype=np.float32)
-
-
-def _save_embeddings(embs):
-    _ensure_dir()
-    np.save(EMBEDDINGS_FILE, embs)
+        conn.commit()
+        os.rename(_RAG_STORE_DIR, _RAG_STORE_DIR + ".bak")
+    except Exception:
+        conn.rollback()
 
 
 def _chunk_text(text, chunk_size=800, overlap=100):
@@ -78,10 +84,8 @@ def _chunk_text(text, chunk_size=800, overlap=100):
         para = para.strip()
         if not para:
             continue
-        # If adding this paragraph exceeds chunk_size, finalize current
         if current and len(current) + len(para) + 2 > chunk_size:
             chunks.append(current.strip())
-            # Keep overlap from end of current chunk
             if overlap > 0 and len(current) > overlap:
                 current = current[-overlap:] + "\n\n" + para
             else:
@@ -92,7 +96,6 @@ def _chunk_text(text, chunk_size=800, overlap=100):
     if current.strip():
         chunks.append(current.strip())
 
-    # If any chunk is still too long, split at sentence boundaries
     final = []
     for chunk in chunks:
         if len(chunk) <= chunk_size * 1.5:
@@ -114,7 +117,6 @@ def _chunk_text(text, chunk_size=800, overlap=100):
 
 def _split_sentences(text):
     """Split text into sentences (simple heuristic)."""
-    import re
     parts = re.split(r'(?<=[.!?])\s+', text)
     return [p for p in parts if p.strip()]
 
@@ -130,7 +132,6 @@ def _cosine_similarity(query_vec, matrix):
     """Compute cosine similarity between a query vector and a matrix of vectors."""
     if matrix.shape[0] == 0:
         return np.array([])
-    # Normalize
     query_norm = query_vec / (np.linalg.norm(query_vec) + 1e-10)
     norms = np.linalg.norm(matrix, axis=1, keepdims=True) + 1e-10
     matrix_norm = matrix / norms
@@ -142,78 +143,96 @@ def _cosine_similarity(query_vec, matrix):
 
 def rag_index(text, filename="untitled", tags=None):
     """Chunk text, embed, and store in the RAG index."""
+    _migrate_from_rag_store()
     chunks_text = _chunk_text(text)
     if not chunks_text:
         return "No text to index."
 
-    # Generate doc_id
-    index = _load_index()
-    doc_id = f"doc_{int(time.time())}_{len(index)}"
+    conn = get_connection()
+    doc_count = conn.execute("SELECT COUNT(*) FROM rag_docs").fetchone()[0]
+    doc_id = f"doc_{int(time.time())}_{doc_count}"
 
     # Embed all chunks
     embeddings = _embed(chunks_text)
 
-    # Load existing data
-    existing_chunks = _load_chunks()
-    existing_embs = _load_embeddings()
+    # Insert doc record
+    tags_json = json.dumps(tags or [], ensure_ascii=False)
+    conn.execute(
+        "INSERT INTO rag_docs (doc_id, filename, chunk_count, timestamp, tags) VALUES (?, ?, ?, ?, ?)",
+        (doc_id, filename, len(chunks_text), time.strftime("%Y-%m-%d %H:%M:%S"), tags_json),
+    )
 
-    # Append new chunks
+    # Insert chunks with embeddings as BLOBs
     for i, chunk in enumerate(chunks_text):
-        existing_chunks.append({
-            "doc_id": doc_id,
-            "chunk_index": i,
-            "text": chunk,
-        })
+        conn.execute(
+            "INSERT INTO rag_chunks (doc_id, chunk_index, text, embedding) VALUES (?, ?, ?, ?)",
+            (doc_id, i, chunk, embeddings[i].tobytes()),
+        )
 
-    # Append embeddings
-    if existing_embs.shape[0] > 0:
-        all_embs = np.vstack([existing_embs, embeddings])
-    else:
-        all_embs = embeddings
-
-    # Update index
-    index.append({
-        "doc_id": doc_id,
-        "filename": filename,
-        "chunk_count": len(chunks_text),
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "tags": tags or [],
-    })
-
-    _save_index(index)
-    _save_chunks(existing_chunks)
-    _save_embeddings(all_embs)
-
+    conn.commit()
     return f"Indexed '{filename}' as {doc_id}: {len(chunks_text)} chunks, {len(text)} chars"
 
 
 def rag_search(query, top_k=5):
-    """Search the RAG index by semantic similarity."""
-    chunks = _load_chunks()
-    embs = _load_embeddings()
+    """Search the RAG index using hybrid semantic + keyword search."""
+    _migrate_from_rag_store()
+    conn = get_connection()
 
-    if not chunks or embs.shape[0] == 0:
+    rows = conn.execute("SELECT id, doc_id, chunk_index, text, embedding FROM rag_chunks").fetchall()
+    if not rows:
         return "RAG index is empty. Index some documents first."
 
+    # --- Cosine similarity scores ---
+    chunk_ids = [r["id"] for r in rows]
+    texts = [r["text"] for r in rows]
+    embeddings = np.array(
+        [np.frombuffer(r["embedding"], dtype=np.float32) for r in rows]
+    )
+
     query_emb = _embed([query])[0]
-    scores = _cosine_similarity(query_emb, embs)
+    cosine_scores = _cosine_similarity(query_emb, embeddings)
 
-    # Get top-k indices
-    k = min(top_k, len(scores))
-    top_indices = np.argsort(scores)[-k:][::-1]
+    # --- FTS5 BM25 scores ---
+    words = query.strip().split()
+    fts_query = " ".join(f'"{w}"' for w in words if w)
 
-    index = _load_index()
-    doc_map = {d["doc_id"]: d["filename"] for d in index}
+    bm25_map = {}
+    if fts_query:
+        try:
+            fts_rows = conn.execute(
+                "SELECT rowid, rank FROM rag_chunks_fts WHERE rag_chunks_fts MATCH ? ORDER BY rank",
+                (fts_query,),
+            ).fetchall()
+            if fts_rows:
+                # rank is negative (lower = better match), normalize to 0-1
+                raw_scores = {r["rowid"]: -r["rank"] for r in fts_rows}
+                max_score = max(raw_scores.values()) if raw_scores else 1.0
+                if max_score > 0:
+                    bm25_map = {rid: s / max_score for rid, s in raw_scores.items()}
+        except Exception:
+            pass  # FTS query might fail on unusual input; fall back to cosine only
+
+    # --- Combine scores ---
+    combined = []
+    doc_map = {}
+    for doc_row in conn.execute("SELECT doc_id, filename FROM rag_docs").fetchall():
+        doc_map[doc_row["doc_id"]] = doc_row["filename"]
+
+    for i, row in enumerate(rows):
+        cos = float(cosine_scores[i])
+        bm25 = bm25_map.get(row["id"], 0.0)
+        score = 0.7 * cos + 0.3 * bm25
+        combined.append((score, cos, bm25, row))
+
+    combined.sort(key=lambda x: x[0], reverse=True)
 
     results = []
-    for idx in top_indices:
-        chunk = chunks[idx]
-        score = float(scores[idx])
+    for score, cos, bm25, row in combined[:top_k]:
         if score < 0.1:
             continue
-        filename = doc_map.get(chunk["doc_id"], "unknown")
+        filename = doc_map.get(row["doc_id"], "unknown")
         results.append(
-            f"[{score:.3f}] {filename} (chunk {chunk['chunk_index']}):\n{chunk['text']}"
+            f"[{score:.3f}] {filename} (chunk {row['chunk_index']}):\n{row['text']}"
         )
 
     if not results:
@@ -224,57 +243,34 @@ def rag_search(query, top_k=5):
 
 def rag_list():
     """List all indexed documents."""
-    index = _load_index()
-    if not index:
+    _migrate_from_rag_store()
+    conn = get_connection()
+    docs = conn.execute("SELECT * FROM rag_docs ORDER BY timestamp").fetchall()
+
+    if not docs:
         return "RAG index is empty."
 
-    lines = [f"Indexed documents ({len(index)}):\n"]
-    for doc in index:
-        tags = ", ".join(doc.get("tags", [])) if doc.get("tags") else "none"
+    lines = [f"Indexed documents ({len(docs)}):\n"]
+    for doc in docs:
+        tags = json.loads(doc["tags"])
+        tags_str = ", ".join(tags) if tags else "none"
         lines.append(
             f"  {doc['doc_id']}: {doc['filename']} "
-            f"({doc['chunk_count']} chunks, {doc['timestamp']}, tags: {tags})"
+            f"({doc['chunk_count']} chunks, {doc['timestamp']}, tags: {tags_str})"
         )
     return "\n".join(lines)
 
 
 def rag_delete(doc_id):
     """Delete a document from the RAG index by doc_id."""
-    index = _load_index()
-    chunks = _load_chunks()
-    embs = _load_embeddings()
+    _migrate_from_rag_store()
+    conn = get_connection()
 
-    # Find the doc
-    doc_entry = None
-    for d in index:
-        if d["doc_id"] == doc_id:
-            doc_entry = d
-            break
-
-    if not doc_entry:
+    doc = conn.execute("SELECT filename FROM rag_docs WHERE doc_id = ?", (doc_id,)).fetchone()
+    if not doc:
         return f"Document not found: {doc_id}"
 
-    filename = doc_entry["filename"]
-
-    # Filter out chunks and corresponding embeddings
-    keep_indices = []
-    new_chunks = []
-    for i, chunk in enumerate(chunks):
-        if chunk["doc_id"] != doc_id:
-            keep_indices.append(i)
-            new_chunks.append(chunk)
-
-    # Rebuild embeddings
-    if keep_indices and embs.shape[0] > 0:
-        new_embs = embs[keep_indices]
-    else:
-        new_embs = np.empty((0, EMBED_DIM), dtype=np.float32)
-
-    # Remove from index
-    new_index = [d for d in index if d["doc_id"] != doc_id]
-
-    _save_index(new_index)
-    _save_chunks(new_chunks)
-    _save_embeddings(new_embs)
-
+    filename = doc["filename"]
+    conn.execute("DELETE FROM rag_docs WHERE doc_id = ?", (doc_id,))
+    conn.commit()
     return f"Deleted '{filename}' ({doc_id})"

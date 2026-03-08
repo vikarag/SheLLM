@@ -94,16 +94,16 @@ Every engine gets all of these automatically:
 | `list_directory` | List files and directories in workspace/ with sizes |
 | `search_files` | Regex search across files in workspace/ |
 | `rag_index` | Index a document for semantic search (chunking + embeddings) |
-| `rag_search` | Search indexed documents by semantic similarity |
+| `rag_search` | Hybrid search: semantic similarity + FTS5 keyword matching |
 | `rag_list` | List all indexed documents |
 | `rag_delete` | Delete a document from the RAG index |
 | `run_command` | Execute shell commands (with confirmation + blocklist) |
 | `cron_create` | Schedule cron jobs |
 | `cron_list` | List current cron jobs |
 | `cron_delete` | Remove a cron job |
-| `memory_write` | Save to persistent shared memory (JSON) |
+| `memory_write` | Save to persistent shared memory (SQLite) |
 | `memory_read` | Read stored memories |
-| `memory_search` | Search memories by keyword |
+| `memory_search` | Search memories by keyword (FTS5 full-text search) |
 | `memory_delete` | Delete a memory entry |
 | `chat_log_read` | Query past conversations across all engines |
 
@@ -177,19 +177,20 @@ BaseChatClient (base_chat.py, ~600 loc)
         +-- Persistent sessions (telegram_sessions.json)
 
 Modules:
+  |-- db.py              Shared SQLite database (WAL mode, FTS5, thread-safe)
   |-- file_tools.py      File ops (read/write/list/search) scoped to workspace/
-  |-- rag_engine.py      Document indexing + semantic search (OpenAI embeddings + numpy)
+  |-- rag_engine.py      Document indexing + hybrid search (cosine + BM25)
   |-- command_runner.py   Shell command execution
   |-- cron_manager.py     Cron job management
-  +-- memory_manager.py   Persistent shared memory (memory.json)
+  +-- memory_manager.py   Persistent shared memory (SQLite + FTS5 + auto-archival)
 
 Engines: 15-50 lines each
   |-- deepseek_chat.py   Chat    (DeepSeek, +reasoner conditional logic)
   |-- kimi_chat.py       Code    (Kimi K2.5, +thinking mode toggle)
   +-- gpt5mini_chat.py   Research (GPT-5 Mini, config only + web search delegate)
 
+shellm.db    -- single SQLite database for memory + RAG (WAL mode)
 workspace/   -- shellm's project directory for file output
-rag_store/   -- RAG index, chunks, and embeddings
 ```
 
 ## License

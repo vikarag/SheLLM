@@ -577,7 +577,7 @@ class BaseChatClient:
             "  - gpt5mini_chat.py — Research engine config\n"
             "  - telegram_adapter.py — your Telegram bot interface\n"
             "  - telegram_format.py — Markdown-to-HTML formatter for Telegram\n"
-            "  - memory_manager.py — your persistent memory system (memory.json)\n"
+            "  - memory_manager.py — your persistent memory system (shellm.db)\n"
             "  - file_tools.py — file operations (read, write, list, search) scoped to workspace/\n"
             "  - rag_engine.py — RAG document indexing and semantic search\n"
             "  - command_runner.py — shell command execution\n"
