@@ -295,19 +295,34 @@ class TelegramAdapter:
                     await update.message.reply_text("Plan cancelled.")
                     return
                 elif any(lower.startswith(w) for w in confirm_words):
-                    original_prompt = adapter._pending_plans.pop(chat_id)
+                    plan_data = adapter._pending_plans.pop(chat_id)
+                    original_prompt = plan_data["prompt"]
+                    plan_text = plan_data.get("plan", "")
+
+                    execution_prompt = (
+                        f"[PLAN EXECUTION MODE]\n"
+                        f"You are executing an approved plan. Here is the plan:\n\n"
+                        f"{plan_text}\n\n"
+                        f"IMPORTANT: After completing each major step, call the report_progress tool "
+                        f"with the step number, total steps, title, and what was accomplished.\n\n"
+                        f"Now execute: {original_prompt}"
+                    )
+
+                    adapter.client._plan_text = plan_text
                     await update.message.chat.send_action(ChatAction.TYPING)
                     try:
                         response = await adapter.handle_message_streaming(
-                            chat_id, original_prompt, bot
+                            chat_id, execution_prompt, bot
                         )
                         await adapter._send_response(update.message, response)
                     except Exception as e:
                         await update.message.reply_text(f"Error: {e}")
+                    finally:
+                        adapter.client._plan_text = None
                     return
                 else:
                     # Treat as feedback — regenerate plan with the feedback
-                    original_prompt = adapter._pending_plans[chat_id]
+                    original_prompt = adapter._pending_plans[chat_id]["prompt"]
                     feedback_prompt = (
                         f"The user gave feedback on your previous plan. "
                         f"Original task: {original_prompt}\n\n"
@@ -324,7 +339,8 @@ class TelegramAdapter:
                         response = await loop.run_in_executor(
                             None, lambda: adapter.client.process_prompt(feedback_prompt, plan_messages)
                         )
-                        # Keep the pending plan (updated prompt stays the same)
+                        # Update stored plan text with the revised plan
+                        adapter._pending_plans[chat_id]["plan"] = response or ""
                         await adapter._send_response(update.message, response or "(No plan generated)")
                     except Exception as e:
                         await update.message.reply_text(f"Error: {e}")
@@ -609,7 +625,7 @@ class TelegramAdapter:
                 response = await loop.run_in_executor(
                     None, lambda: adapter.client.process_prompt(plan_prompt, plan_messages)
                 )
-                adapter._pending_plans[chat_id] = prompt
+                adapter._pending_plans[chat_id] = {"prompt": prompt, "plan": response or ""}
                 await adapter._send_response(update.message, response or "(No plan generated)")
             except Exception as e:
                 await update.message.reply_text(f"Error: {e}")

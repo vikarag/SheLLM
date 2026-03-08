@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime, timezone, timedelta
 
@@ -393,6 +394,23 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "report_progress",
+            "description": "Report completion of a major step during plan execution. Call this after finishing each numbered step. A background AI will summarize and notify the user.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "step_number": {"type": "integer", "description": "Step number completed (1-based)"},
+                    "total_steps": {"type": "integer", "description": "Total number of steps in the plan"},
+                    "step_title": {"type": "string", "description": "Brief title of the completed step"},
+                    "details": {"type": "string", "description": "What was accomplished, including key results"},
+                },
+                "required": ["step_number", "step_title", "details"],
+            },
+        },
+    },
 ]
 
 
@@ -423,6 +441,7 @@ class BaseChatClient:
         self._mode = "interactive"
         self._on_token = None  # callback(accumulated_text) for streaming consumers
         self._current_chat_id = None  # set by Telegram adapter per message
+        self._plan_text = None  # set by Telegram adapter during plan execution
 
     def _print(self, *args, **kwargs):
         if not self._silent:
@@ -618,12 +637,60 @@ class BaseChatClient:
             result_text = cancel_scheduled_task(args.get("task_id", 0))
             self._print(result_text)
             return result_text
+        elif name == "report_progress":
+            self._report_plan_progress(args)
+            return f"Progress reported: Step {args.get('step_number', '?')} - {args.get('step_title', '')}"
         elif "__" in name:
             try:
                 return MCPManager.get_instance().call_tool(name, args)
             except Exception as e:
                 return f"MCP tool error ({name}): {e}"
         return f"Unknown tool: {name}"
+
+    def _report_plan_progress(self, args):
+        """Send a plan progress update via GPT-5 Nano + Telegram in a background thread."""
+        chat_id = self._current_chat_id
+        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+        if not chat_id or not bot_token:
+            return  # No-op in CLI/daemon mode
+
+        plan_text = (self._plan_text or "")[:2000]
+        step_number = args.get("step_number", "?")
+        total_steps = args.get("total_steps", "?")
+        step_title = args.get("step_title", "")
+        details = args.get("details", "")
+
+        def _bg_send():
+            try:
+                from gpt5nano_chat import GPT5MiniChat
+                nano = GPT5MiniChat()
+                nano._silent = True
+
+                summary_prompt = (
+                    f"Summarize this plan step completion in 1-2 concise sentences for a Telegram notification.\n\n"
+                    f"Step {step_number}/{total_steps}: {step_title}\n"
+                    f"Details: {details}\n\n"
+                    f"Plan context:\n{plan_text}"
+                )
+                messages = [{"role": "user", "content": summary_prompt}]
+                response = nano.client.chat.completions.create(
+                    model=nano.MODEL,
+                    messages=messages,
+                    max_completion_tokens=200,
+                )
+                summary = response.choices[0].message.content or details
+
+                text = f"[Plan Progress {step_number}/{total_steps}]\n\n{summary}"
+                import urllib.request as _ur
+                url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                data = json.dumps({"chat_id": chat_id, "text": text}).encode()
+                req = _ur.Request(url, data=data, headers={"Content-Type": "application/json"})
+                _ur.urlopen(req, timeout=15)
+            except Exception:
+                pass  # Best-effort: never crash execution
+
+        t = threading.Thread(target=_bg_send, daemon=True)
+        t.start()
 
     def _run_claude_code(self, prompt, working_directory=None):
         """Run Claude Code CLI with the given prompt and return its output."""
