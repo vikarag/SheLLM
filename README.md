@@ -18,6 +18,22 @@ echo "Summarize today's news" | ./gpt5mini_chat.py --daemon stdin
 | Modes | Interactive | Interactive, daemon (stdin/file/socket), Telegram |
 | Footprint | Heavy | ~500 lines of core code |
 
+## Three Engines
+
+shellm ships with three purpose-built engines:
+
+| Engine | Script | Model | Role |
+|--------|--------|-------|------|
+| **Chat** | `deepseek_chat.py` | DeepSeek | General conversation, reasoning, thinking mode |
+| **Code** | `kimi_chat.py` | Kimi K2.5 | Code generation, analysis, refactoring (CoT) |
+| **Research** | `gpt5mini_chat.py` | GPT-5 Mini | Web research, summarization, fact-finding |
+
+```bash
+./deepseek_chat.py    # Chat -- ask anything
+./kimi_chat.py        # Code -- write and review code
+./gpt5mini_chat.py    # Research -- search the web and synthesize answers
+```
+
 ## Quick Start
 
 ```bash
@@ -27,13 +43,15 @@ python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 python -m camoufox fetch
 
-export OPENAI_API_KEY="your-key"
-./gpt5mini_chat.py
+# Set at least one API key
+export DEEPSEEK_API_KEY="your-key"     # Chat engine
+export MOONSHOT_API_KEY="your-key"     # Code engine
+export OPENAI_API_KEY="your-key"       # Research engine
+
+./deepseek_chat.py
 ```
 
-That's it. You're chatting with tools.
-
-## Add Your Own Model (15 lines)
+## Add Your Own Engine (15 lines)
 
 ```python
 #!/usr/bin/env python3
@@ -41,7 +59,7 @@ from base_chat import BaseChatClient
 
 class MyChat(BaseChatClient):
     MODEL = "my-model-id"
-    BANNER_NAME = "My Model"
+    BANNER_NAME = "My Engine"
     ENV_VAR = "MY_API_KEY"
     BASE_URL = "https://api.example.com/v1"  # omit for OpenAI
 
@@ -49,11 +67,11 @@ if __name__ == "__main__":
     MyChat().run()
 ```
 
-Override `build_params()` for custom behavior (see `deepseek_chat.py` for an example).
+Override `build_params()` for custom behavior (see `deepseek_chat.py` and `kimi_chat.py` for examples).
 
 ## Built-in Tools (11)
 
-Every model gets all of these automatically:
+Every engine gets all of these automatically:
 
 | Tool | What it does |
 |------|-------------|
@@ -67,7 +85,7 @@ Every model gets all of these automatically:
 | `memory_read` | Read stored memories |
 | `memory_search` | Search memories by keyword |
 | `memory_delete` | Delete a memory entry |
-| `chat_log_read` | Query past conversations across all models |
+| `chat_log_read` | Query past conversations across all engines |
 
 The model decides when to use them. Up to 10 tool-call rounds per turn.
 
@@ -75,23 +93,23 @@ The model decides when to use them. Up to 10 tool-call rounds per turn.
 
 ```bash
 # Interactive (default)
-./gpt5mini_chat.py
+./deepseek_chat.py
 
 # Pipe a prompt
-echo "What is 2+2?" | ./gpt5mini_chat.py --daemon stdin
+echo "What is 2+2?" | ./deepseek_chat.py --daemon stdin
 
 # JSON output
-echo "What is 2+2?" | ./gpt5mini_chat.py --daemon stdin --json
+echo "What is 2+2?" | ./deepseek_chat.py --daemon stdin --json
 
 # Batch from file
 ./gpt5mini_chat.py --daemon file --input prompts.txt --output responses.txt
 
 # Unix socket server (concurrent access)
-./gpt5mini_chat.py --daemon socket --socket-path /tmp/gpt5mini.sock
+./deepseek_chat.py --daemon socket --socket-path /tmp/deepseek.sock
 
 # Telegram bot
 export TELEGRAM_BOT_TOKEN="your-token"
-./gpt5mini_chat.py --telegram
+./deepseek_chat.py --telegram
 ```
 
 ## Interactive Commands
@@ -124,23 +142,11 @@ BaseChatClient (base_chat.py, ~500 loc)
   ├── Daemon mode (daemon_mode.py)
   └── Telegram adapter (telegram_adapter.py)
 
-Subclasses: 15-50 lines each
-  ├── gpt5mini_chat.py    (OpenAI, config only)
-  ├── gpt5nano_chat.py    (OpenAI, config only)
-  ├── mercury2_chat.py    (Inception Labs, config only)
-  ├── kimi_chat.py        (Moonshot AI, +thinking mode toggle)
-  └── deepseek_chat.py    (DeepSeek, +reasoner/chat conditional logic)
+Engines: 15-50 lines each
+  ├── deepseek_chat.py   Chat    (DeepSeek, +reasoner conditional logic)
+  ├── kimi_chat.py       Code    (Kimi K2.5, +thinking mode toggle)
+  └── gpt5mini_chat.py   Research (GPT-5 Mini, config only)
 ```
-
-## Included Models
-
-| Script | Provider | Key env var |
-|--------|----------|-------------|
-| `gpt5mini_chat.py` | OpenAI | `OPENAI_API_KEY` |
-| `gpt5nano_chat.py` | OpenAI | `OPENAI_API_KEY` |
-| `deepseek_chat.py` | DeepSeek | `DEEPSEEK_API_KEY` |
-| `kimi_chat.py` | Moonshot AI | `MOONSHOT_API_KEY` |
-| `mercury2_chat.py` | Inception Labs | `INCEPTION_API_KEY` |
 
 ## MCP Server
 

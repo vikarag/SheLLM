@@ -1,5 +1,5 @@
 #!/home/gslee/llm-api-vault/venv/bin/python3
-"""Interactive chat with DeepSeek Reasoner (V3.2 thinking mode) - maintains conversation history."""
+"""shellm Chat Engine -- DeepSeek for general conversation and reasoning."""
 
 from base_chat import BaseChatClient
 
@@ -12,7 +12,7 @@ TEMPERATURE = 0.1             # 0.0-2.0 (only works with deepseek-chat; ignored 
 
 class DeepSeekChat(BaseChatClient):
     MODEL = MODEL
-    BANNER_NAME = "DeepSeek Chat"
+    BANNER_NAME = "shellm Chat"
     ENV_VAR = "DEEPSEEK_API_KEY"
     BASE_URL = "https://api.deepseek.com"
     STREAM = STREAM
