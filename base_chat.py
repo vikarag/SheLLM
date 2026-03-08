@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone, timedelta
@@ -752,6 +753,11 @@ class BaseChatClient:
                     answer, _ = self.handle_stream(response)
                 else:
                     answer, _ = self.handle_batch(response)
+
+            # Strip DeepSeek internal markup that leaks into content
+            if answer:
+                answer = re.sub(r"<｜DSML｜function_calls>.*?</｜DSML｜function_calls>", "", answer, flags=re.DOTALL).strip()
+                answer = re.sub(r"<｜DSML｜[^>]*>", "", answer).strip()
 
             if answer:
                 messages.append({"role": "assistant", "content": answer})
