@@ -225,6 +225,8 @@ class TelegramAdapter:
         """Handle a message: run LLM in background thread, return final answer."""
         messages = self.get_or_create_session(chat_id)
 
+        self.client._current_chat_id = chat_id
+
         loop = asyncio.get_event_loop()
         final_answer = await loop.run_in_executor(
             None, self.client.process_prompt, text, messages
@@ -558,6 +560,10 @@ class TelegramAdapter:
         app.add_handler(MessageHandler(filters.PHOTO, _on_photo))
         app.add_handler(MessageHandler(filters.Document.ALL, _on_document))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
+
+        # Start heartbeat scheduler with bot token for proactive messages
+        from task_scheduler import TaskScheduler
+        TaskScheduler.get_instance().start(bot_token=self.bot_token)
 
         print(f"Telegram bot started with streaming (model: {self.client.MODEL})", flush=True)
         app.run_polling(drop_pending_updates=True)

@@ -19,6 +19,7 @@ from memory_manager import memory_read, memory_write, memory_search, memory_dele
 from file_tools import read_file, write_file, list_directory, search_files
 from rag_engine import rag_index, rag_search, rag_list, rag_delete
 from mcp_manager import MCPManager
+from task_scheduler import schedule_task, list_scheduled_tasks, cancel_scheduled_task, TaskScheduler
 
 CHAT_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_logs.json")
 KST = timezone(timedelta(hours=9))
@@ -42,11 +43,11 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read a file from workspace/ with line numbers. Use offset and limit for large files.",
+            "description": "Read a file from the project directory (~/llm-api-vault/) with line numbers. Can read source code, configs, etc. Use offset and limit for large files.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Relative path within workspace/"},
+                    "path": {"type": "string", "description": "Relative path within the project directory (e.g. 'base_chat.py', 'workspace/notes.txt')"},
                     "offset": {"type": "integer", "description": "Start line (0-based, default 0)"},
                     "limit": {"type": "integer", "description": "Max lines to return (default 200)"},
                 },
@@ -312,6 +313,50 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "schedule_task",
+            "description": "Schedule a delayed task. Supports sending a Telegram message or running a shell command at a future time. Use delay_minutes for relative scheduling or scheduled_at for absolute time.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_type": {"type": "string", "enum": ["telegram_message", "shell_command"], "description": "Type of task to schedule"},
+                    "payload": {"type": "object", "description": "Task data. For telegram_message: {\"message\": \"...\"}. For shell_command: {\"command\": \"...\"}. chat_id is auto-injected for Telegram."},
+                    "delay_minutes": {"type": "number", "description": "Minutes from now to execute (e.g. 60 for 1 hour, 1800 for 30 hours)"},
+                    "scheduled_at": {"type": "string", "description": "Absolute time in 'YYYY-MM-DD HH:MM:SS' format (KST). Alternative to delay_minutes."},
+                },
+                "required": ["task_type", "payload"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_scheduled_tasks",
+            "description": "List scheduled tasks. Filter by status: pending, done, failed, cancelled.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "description": "Filter by status (default: pending)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_scheduled_task",
+            "description": "Cancel a pending scheduled task by its ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "integer", "description": "Task ID to cancel (from list_scheduled_tasks)"},
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
 ]
 
 
@@ -341,6 +386,7 @@ class BaseChatClient:
         self._current_tool_calls = []
         self._mode = "interactive"
         self._on_token = None  # callback(accumulated_text) for streaming consumers
+        self._current_chat_id = None  # set by Telegram adapter per message
 
     def _print(self, *args, **kwargs):
         if not self._silent:
@@ -516,6 +562,22 @@ class BaseChatClient:
             return MCPManager.get_instance().list_servers()
         elif name == "mcp_list_tools":
             return MCPManager.get_instance().list_server_tools(args.get("server"))
+        elif name == "schedule_task":
+            result_text = schedule_task(
+                task_type=args.get("task_type", ""),
+                payload=args.get("payload", {}),
+                delay_minutes=args.get("delay_minutes"),
+                scheduled_at=args.get("scheduled_at"),
+                chat_id=self._current_chat_id,
+            )
+            self._print(result_text)
+            return result_text
+        elif name == "list_scheduled_tasks":
+            return list_scheduled_tasks(status=args.get("status", "pending"))
+        elif name == "cancel_scheduled_task":
+            result_text = cancel_scheduled_task(args.get("task_id", 0))
+            self._print(result_text)
+            return result_text
         elif "__" in name:
             try:
                 return MCPManager.get_instance().call_tool(name, args)
@@ -650,8 +712,9 @@ class BaseChatClient:
             f"You are SheLLM, a helpful AI assistant. Current date/time: {now} (Asia/Seoul, UTC+9). "
             "You have persistent shared memory (use memory_read at the start of a conversation to recall "
             "who you are and what you know about the user). You can search the web (via web_research, "
-            "delegated to GPT-5 Mini), execute shell commands, manage cron jobs, read/write/search files "
-            "in workspace/, and review past chat logs with chat_log_read. "
+            "delegated to GPT-5 Mini), execute shell commands, manage cron jobs, read files from the "
+            "project directory (read_file), write/search files in workspace/, and review past chat logs "
+            "with chat_log_read. "
             "You also have a RAG system — use rag_index to store documents for semantic search, "
             "and rag_search to retrieve relevant chunks later. Suggest indexing when the user sends documents. "
             "You also have MCP (Model Context Protocol) support — external servers can provide "
@@ -670,7 +733,8 @@ class BaseChatClient:
             "  - telegram_adapter.py — your Telegram bot interface\n"
             "  - telegram_format.py — Markdown-to-HTML formatter for Telegram\n"
             "  - memory_manager.py — your persistent memory system (shellm.db)\n"
-            "  - file_tools.py — file operations (read, write, list, search) scoped to workspace/\n"
+            "  - task_scheduler.py — heartbeat scheduler for delayed tasks (schedule_task, list/cancel)\n"
+            "  - file_tools.py — file operations (read from project dir, write/list/search in workspace/)\n"
             "  - rag_engine.py — RAG document indexing and semantic search\n"
             "  - command_runner.py — shell command execution\n"
             "  - cron_manager.py — cron job management\n"
@@ -680,6 +744,10 @@ class BaseChatClient:
             "check git status/diff/log, view your Telegram bot logs (`cat /tmp/shellm_bot.log`), "
             "list files, inspect your memory.json, and manage your own processes. "
             "You can also modify your own config files in workspace/ or create projects there. "
+            "You have a task scheduler — use schedule_task to send a Telegram message or run a shell "
+            "command at a future time (e.g. 'message me in 30 minutes', 'run backup in 2 hours'). "
+            "Use list_scheduled_tasks and cancel_scheduled_task to manage them. "
+            "For read_file, you can read any file in the project directory (e.g. read_file('base_chat.py')). "
             f"You are currently running as: {self.MODEL} (engine: {self.BANNER_NAME})."
         )
         if self._mode == "telegram":

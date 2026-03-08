@@ -4,6 +4,7 @@ import os
 import re
 
 WORKSPACE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace")
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _safe_path(relative_path):
@@ -18,9 +19,20 @@ def _safe_path(relative_path):
     return real
 
 
+def _safe_read_path(relative_path):
+    """Resolve a relative path for reading — allows anywhere under the project directory."""
+    if not relative_path:
+        return PROJECT_DIR
+    joined = os.path.join(PROJECT_DIR, relative_path)
+    real = os.path.realpath(joined)
+    if not real.startswith(os.path.realpath(PROJECT_DIR)):
+        raise ValueError(f"Path escapes project directory: {relative_path}")
+    return real
+
+
 def read_file(path, offset=0, limit=200):
     """Read a file with line numbers. Returns up to `limit` lines starting from `offset`."""
-    real = _safe_path(path)
+    real = _safe_read_path(path)
     if not os.path.isfile(real):
         return f"File not found: {path}"
     try:

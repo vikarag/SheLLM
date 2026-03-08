@@ -98,5 +98,17 @@ def _init_schema(conn: sqlite3.Connection):
             VALUES ('delete', old.id, old.text);
             INSERT INTO rag_chunks_fts(rowid, text) VALUES (new.id, new.text);
         END;
+
+        -- Scheduled tasks for heartbeat scheduler
+        CREATE TABLE IF NOT EXISTS scheduled_tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            scheduled_at TEXT NOT NULL,
+            task_type TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            result TEXT DEFAULT NULL,
+            executed_at TEXT DEFAULT NULL
+        );
     """)
     conn.commit()

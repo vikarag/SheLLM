@@ -10,6 +10,9 @@ import threading
 
 def run_daemon(client, mode, args):
     """Dispatch to the appropriate daemon mode."""
+    from task_scheduler import TaskScheduler
+    TaskScheduler.get_instance().start()
+
     client._silent = True
     client._mode = f"daemon-{mode}"
     if mode == "stdin":

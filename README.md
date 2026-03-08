@@ -2,9 +2,9 @@
   <img src="shellm-logo.svg" alt="SheLLM" width="360">
 </p>
 
-A lightweight [OpenClaw](https://github.com/openclaw) alternative. One base class, 21 built-in tools + MCP extensibility, extend in 15 lines.
+A lightweight [OpenClaw](https://github.com/openclaw) alternative. One base class, 24 built-in tools + MCP extensibility, extend in 15 lines.
 
-**SheLLM** (pronounced *shell-el-em*) is a minimal CLI chat framework for tool-using LLMs. It gives any OpenAI-compatible model web search, shell access, cron scheduling, persistent memory, file editing, RAG document search, chat logging, and MCP server integration -- out of the box, with zero config.
+**SheLLM** (pronounced *shell-el-em*) is a minimal CLI chat framework for tool-using LLMs. It gives any OpenAI-compatible model web search, shell access, cron scheduling, task scheduling, persistent memory, file editing, RAG document search, chat logging, and MCP server integration -- out of the box, with zero config.
 
 ```bash
 echo "Summarize today's news" | ./gpt5mini_chat.py --daemon stdin
@@ -84,14 +84,14 @@ if __name__ == "__main__":
 
 Override `build_params()` for custom behavior (see `deepseek_chat.py` and `kimi_chat.py` for examples).
 
-## Built-in Tools (21)
+## Built-in Tools (24)
 
 Every engine gets all of these automatically:
 
 | Tool | What it does |
 |------|-------------|
 | `web_research` | Web search and synthesis via GPT-5 Mini (native web search) |
-| `read_file` | Read files from workspace/ with line numbers |
+| `read_file` | Read files from the project directory with line numbers |
 | `write_file` | Write or append to files in workspace/ |
 | `list_directory` | List files and directories in workspace/ with sizes |
 | `search_files` | Regex search across files in workspace/ |
@@ -103,6 +103,9 @@ Every engine gets all of these automatically:
 | `cron_create` | Schedule cron jobs |
 | `cron_list` | List current cron jobs |
 | `cron_delete` | Remove a cron job |
+| `schedule_task` | Schedule a delayed Telegram message or shell command |
+| `list_scheduled_tasks` | List scheduled tasks by status |
+| `cancel_scheduled_task` | Cancel a pending scheduled task |
 | `memory_write` | Save to persistent shared memory (SQLite) |
 | `memory_read` | Read stored memories |
 | `memory_search` | Search memories by keyword (FTS5 full-text search) |
@@ -192,7 +195,7 @@ The LLM can read its own past logs via the `chat_log_read` tool.
 
 ```
 BaseChatClient (base_chat.py, ~700 loc)
-  |-- 21 built-in tools + MCP dynamic tools
+  |-- 24 built-in tools + MCP dynamic tools
   |-- Streaming + batch response handling
   |-- Optional reasoning/thinking display
   |-- Self-aware system prompt (knows its own codebase)
@@ -204,7 +207,8 @@ BaseChatClient (base_chat.py, ~700 loc)
 
 Modules:
   |-- db.py              Shared SQLite database (WAL mode, FTS5, thread-safe)
-  |-- file_tools.py      File ops (read/write/list/search) scoped to workspace/
+  |-- file_tools.py      File ops (read from project dir, write/list/search in workspace/)
+  |-- task_scheduler.py   Heartbeat scheduler for delayed tasks (60s tick, SQLite-backed)
   |-- rag_engine.py      Document indexing + hybrid search (cosine + BM25)
   |-- command_runner.py   Shell command execution
   |-- cron_manager.py     Cron job management
