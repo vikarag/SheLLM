@@ -1,27 +1,27 @@
-# shellm
+# SheLLM
 
 A lightweight [OpenClaw](https://github.com/openclaw) alternative. One base class, 20 built-in tools + MCP extensibility, extend in 15 lines.
 
-**shellm** is a minimal CLI chat framework for tool-using LLMs. It gives any OpenAI-compatible model web search, shell access, cron scheduling, persistent memory, file editing, RAG document search, chat logging, and MCP server integration -- out of the box, with zero config.
+**SheLLM** (pronounced *shell-el-em*) is a minimal CLI chat framework for tool-using LLMs. It gives any OpenAI-compatible model web search, shell access, cron scheduling, persistent memory, file editing, RAG document search, chat logging, and MCP server integration -- out of the box, with zero config.
 
 ```bash
 echo "Summarize today's news" | ./gpt5mini_chat.py --daemon stdin
 ```
 
-## Why shellm?
+## Why SheLLM?
 
-| | OpenClaw | shellm |
+| | OpenClaw | SheLLM |
 |---|---------|--------|
 | Setup | Config files, plugin system, dependencies | One Python class. `pip install openai numpy` |
 | Add a model | Write adapter, register, configure | 15 lines: subclass, set 3 attributes, done |
 | Tool system | Plugin architecture | Built-in: search, shell, cron, memory, chat logs, MCP |
 | Modes | Interactive | Interactive, daemon (stdin/file/socket), Telegram |
 | Footprint | Heavy | ~500 lines of core code |
-| **API cost** | Depends on model choice | **~$2-3/month** typical usage (see below) |
+| **API cost** | Depends on model choice | **~$3/month** typical usage (see below) |
 
 ## Cost-Effective by Design
 
-shellm is built around the most cost-effective LLM APIs available today:
+SheLLM is built around the most cost-effective LLM APIs available today:
 
 | Engine | Model | Input | Output | Typical monthly cost |
 |--------|-------|-------|--------|---------------------|
@@ -29,13 +29,13 @@ shellm is built around the most cost-effective LLM APIs available today:
 | **Code** | Kimi K2.5 | $0.35/M tokens | $1.40/M tokens | ~$0.45 |
 | **Research** | GPT-5 Mini | $1.25/M tokens | $5.00/M tokens | ~$1.50 |
 
-**Total: ~$2-3/month for typical personal use** (a few dozen queries per day).
+**Total: ~$3/month for typical personal use** (a few dozen queries per day).
 
-For comparison, Claude Pro or ChatGPT Plus subscriptions cost $20/month. shellm gives you three specialized engines with tool calling, web search, persistent memory, file editing, RAG, and Telegram access -- for a fraction of the cost, with no subscription lock-in. You pay only for what you use.
+For comparison, Claude Pro or ChatGPT Plus subscriptions cost $20/month. SheLLM gives you three specialized engines with tool calling, web search, persistent memory, file editing, RAG, and Telegram access -- for a fraction of the cost, with no subscription lock-in. You pay only for what you use.
 
 ## Three Engines
 
-shellm ships with three purpose-built engines, each chosen for its strength:
+SheLLM ships with three purpose-built engines, each chosen for its strength:
 
 | Engine | Script | Model | Role |
 |--------|--------|-------|------|
@@ -52,8 +52,8 @@ shellm ships with three purpose-built engines, each chosen for its strength:
 ## Quick Start
 
 ```bash
-git clone https://github.com/vikarag/shellm.git
-cd shellm
+git clone https://github.com/vikarag/SheLLM.git
+cd SheLLM
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
@@ -113,7 +113,7 @@ The model decides when to use them. Up to 10 tool-call rounds per turn.
 
 ## MCP Server Support
 
-shellm supports [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) — connect external tool servers without changing code. Any MCP server (filesystem, databases, APIs, etc.) can extend shellm's capabilities dynamically.
+SheLLM supports [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) — connect external tool servers without changing code. Any MCP server (filesystem, databases, APIs, etc.) can extend SheLLM's capabilities dynamically.
 
 ```bash
 # Create mcp_servers.json (Claude Desktop format):
@@ -134,7 +134,7 @@ MCP tools are namespaced as `{server}__{tool}` (e.g., `filesystem__read_file`) t
 
 ## Telegram Bot
 
-shellm runs natively as a Telegram bot with real-time streaming, HTML-formatted responses, and persistent sessions (conversations survive bot restarts).
+SheLLM runs natively as a Telegram bot with real-time streaming, HTML-formatted responses, and persistent sessions (conversations survive bot restarts).
 
 ```bash
 # Set your bot token in .env, then:
@@ -213,8 +213,8 @@ Engines: 15-50 lines each
   |-- kimi_chat.py       Code    (Kimi K2.5, +thinking mode toggle)
   +-- gpt5mini_chat.py   Research (GPT-5 Mini, config only + web search delegate)
 
-shellm.db    -- single SQLite database for memory + RAG (WAL mode)
-workspace/   -- shellm's project directory for file output
+SheLLM.db    -- single SQLite database for memory + RAG (WAL mode)
+workspace/   -- SheLLM's project directory for file output
 ```
 
 ## License
