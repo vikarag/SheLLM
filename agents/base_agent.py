@@ -220,7 +220,9 @@ class BaseAgent:
                 self._print(delta.content, end="", flush=True)
                 answer_chunks.append(delta.content)
                 if self._on_token:
-                    self._on_token("".join(answer_chunks))
+                    self._on_token(self._total_streamed + "".join(answer_chunks))
+
+        self._total_streamed += "".join(answer_chunks)
 
         if tool_calls_data:
             reasoning = "".join(reasoning_chunks) if reasoning_chunks else None
@@ -352,6 +354,7 @@ class BaseAgent:
             )
 
         self._current_tool_calls = []
+        self._total_streamed = ""
         t0 = time.time()
         self._ensure_system_message(messages)
         messages.append({"role": "user", "content": user_input})
@@ -402,6 +405,10 @@ class BaseAgent:
                     answer, _, _ = self.handle_stream(response)
                 else:
                     answer, _ = self.handle_batch(response)
+
+            # For streaming, use full accumulated text across all rounds
+            if self.config.stream and self._total_streamed and self._total_streamed != answer:
+                answer = self._total_streamed
 
             # Strip DeepSeek internal markup
             if answer:
