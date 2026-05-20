@@ -1,11 +1,15 @@
 """Shell command runner with safety blocklist and user confirmation.
 
 Allows LLM models to execute shell commands while blocking
-dangerous operations.
+dangerous operations. Commands run with CWD pinned to workspace/ so
+the agent's shell view matches the file-tool sandbox.
 """
 
+import os
 import re
 import subprocess
+
+WORKSPACE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace")
 
 # Patterns that are ALWAYS blocked (case-insensitive)
 BLOCKED_PATTERNS = [
@@ -40,28 +44,34 @@ def is_blocked(command: str) -> str | None:
     return None
 
 
-def run_command(command: str, timeout: int = 120, auto_approve: bool = False) -> str:
+def run_command(command: str, timeout: int = 60, auto_approve: bool = False) -> str:
     """Execute a shell command after safety check and user confirmation.
+
+    Runs with CWD pinned to workspace/ so the model's shell view stays
+    consistent with read_file/write_file/list_directory (which are also
+    sandboxed). Absolute paths and shell tricks can still reach outside
+    the workspace — this is a consistency boundary, not a security one.
 
     Args:
         command: Shell command to execute
         timeout: Max execution time in seconds (default 60)
-        auto_approve: Skip confirmation prompt (for non-interactive modes like Telegram)
+        auto_approve: Skip confirmation prompt (for non-interactive modes)
 
     Returns:
         Command output (stdout + stderr) or error message
     """
-    # Safety check
     blocked = is_blocked(command)
     if blocked:
         return f"BLOCKED: This command matches a dangerous pattern and cannot be executed.\nBlocked pattern: {blocked}"
 
+    os.makedirs(WORKSPACE, exist_ok=True)
+
     if not auto_approve:
-        # User confirmation (interactive mode only)
         print(f"\n{'='*60}")
         print(f"COMMAND EXECUTION REQUEST")
         print(f"{'='*60}")
         print(f"  $ {command}")
+        print(f"  cwd: {WORKSPACE}")
         print(f"  Timeout: {timeout}s")
         print(f"{'='*60}")
 
@@ -80,6 +90,7 @@ def run_command(command: str, timeout: int = 120, auto_approve: bool = False) ->
             capture_output=True,
             text=True,
             timeout=timeout,
+            cwd=WORKSPACE,
         )
         output = ""
         if result.stdout:

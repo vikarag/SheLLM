@@ -19,6 +19,12 @@ from agents.progress import progress_queue
 CHAT_LOG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chat_logs.json")
 KST = timezone(timedelta(hours=9))
 
+# Cap per tool result before appending to message history. Avoids quadratic
+# context growth across multi-tool turns (each round re-sends every prior
+# result to the model). 12 KB keeps page fetches and search snippets useful
+# while bounding cost.
+MAX_TOOL_RESULT_BYTES = 12_000
+
 
 class BaseAgent:
     """SheLLM's only agent. Configuration comes from AgentConfig."""
@@ -162,6 +168,14 @@ class BaseAgent:
             args, _ = decoder.raw_decode(raw)
             return args
 
+    @staticmethod
+    def _cap_tool_result(text):
+        """Bound a tool result before it lands in message history."""
+        if not text or len(text) <= MAX_TOOL_RESULT_BYTES:
+            return text
+        elided = len(text) - MAX_TOOL_RESULT_BYTES
+        return text[:MAX_TOOL_RESULT_BYTES] + f"\n\n[... truncated, {elided} bytes elided]"
+
     def handle_tool_calls(self, response_message, messages):
         messages.append(response_message)
         for tool_call in response_message.tool_calls:
@@ -170,7 +184,7 @@ class BaseAgent:
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_call.id,
-                "content": result_text,
+                "content": self._cap_tool_result(result_text),
             })
         return self.client.chat.completions.create(**self.build_params(messages))
 
@@ -277,25 +291,61 @@ class BaseAgent:
 
     def _ensure_system_message(self, messages):
         now = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST")
+
+        # Capability flags, derived from the active profile.
+        capability_lines = []
+        if self.config.has_reasoning:
+            capability_lines.append(
+                "- You have native chain-of-thought reasoning. Use it for math, planning, "
+                "and multi-step problems; the CLI surfaces it in a [Thinking] block."
+            )
+        if self.config.vision:
+            capability_lines.append(
+                "- You can read images attached to the user's turn — describe, transcribe, "
+                "or reason about their contents directly."
+            )
+        capability_block = ("\n".join(capability_lines) + "\n\n") if capability_lines else ""
+
         system_content = (
-            f"You are SheLLM, a CLI assistant. Current date/time: {now} (Asia/Seoul, UTC+9).\n\n"
-            "You have a persistent shared memory across sessions — call memory_read at the start "
-            "of a conversation to recall what you know about the user, and use memory_write to "
-            "save useful information for future sessions.\n\n"
+            f"You are SheLLM, a single-agent CLI assistant. "
+            f"Current date/time: {now} (Asia/Seoul, UTC+9).\n\n"
+
+            "IDENTITY\n"
+            f"- Running as: {self.config.model} via {self.config.provider} (profile: {self.config.name}).\n"
+            "- One process, one model, one tool list — no sub-agents, no delegation. You execute every "
+            "tool call yourself.\n"
+            + capability_block +
+
+            "SANDBOX\n"
+            "- All file operations (read_file, write_file, list_directory, search_files) are restricted "
+            "to workspace/. Paths are relative — use '.' for the root, or names like 'notes.txt' or "
+            "'subdir/file.py'. Never use absolute paths like '/' or '/home'.\n"
+            "- run_command also runs with cwd=workspace/, so `ls`, `pwd`, and relative shell paths see "
+            "the same sandbox. The user must confirm every command; dangerous patterns are blocked.\n\n"
+
             "TOOLS\n"
-            "- web_search: DuckDuckGo search. Use whenever you need current information.\n"
-            "- fetch_page: read a specific URL's text content.\n"
-            "- read_file / write_file / list_directory / search_files: file ops sandboxed to workspace/. "
-            "All paths are relative to workspace/ — use '.' for its root, or names like 'notes.txt'. "
-            "Never use absolute paths like '/' or '/home'.\n"
-            "- run_command: execute shell commands (user confirmation required).\n"
-            "- rag_index / rag_search / rag_list / rag_delete: semantic document store.\n"
-            "- cron_list / cron_create / cron_delete: schedule recurring jobs.\n"
-            "- memory_read / memory_write / memory_search / memory_delete: persistent memory.\n"
-            "- chat_log_read: review past conversations.\n\n"
-            "You have up to 20 tool calls per turn. For installs (apt/pip/npm), pass timeout=300 "
-            "to run_command.\n\n"
-            f"You are running as: {self.config.model} ({self.config.name})."
+            "- web_search(query, max_results=5): DuckDuckGo search. Returns titled snippets with URLs. "
+            "Your first move for anything time-sensitive or outside training cutoff.\n"
+            "- fetch_page(url): the readable text of a specific URL. Use after web_search for depth, "
+            "or when the user provides a link.\n"
+            "- read_file / write_file / list_directory / search_files: workspace file ops.\n"
+            "- run_command(command, timeout=60): shell execution in workspace/. Pass timeout=300 for "
+            "installs (apt/pip/npm) or long-running tasks.\n"
+            "- memory_read / memory_write / memory_search / memory_delete: persistent memory that "
+            "survives across sessions. Save anything useful about the user's preferences, projects, or "
+            "ongoing work. Read it when context from prior sessions would help — don't read reflexively "
+            "on greetings.\n"
+            "- rag_index / rag_search / rag_list / rag_delete: semantic document store. Index long "
+            "documents the user shares, then retrieve relevant chunks via rag_search later.\n"
+            "- cron_list / cron_create / cron_delete: manage user crontab entries for scheduled tasks.\n"
+            "- chat_log_read(last_n, keyword, model_filter): review past conversation history.\n\n"
+
+            "EXECUTION\n"
+            "- You have a 20-tool-call budget per user turn. Each tool result is capped at "
+            f"{MAX_TOOL_RESULT_BYTES // 1000} KB before it lands in your history, so don't depend on "
+            "huge per-call payloads — refine queries or fetch specific pages instead.\n"
+            "- When a tool returns an error string, read it and adjust. Errors are observations, not "
+            "stop signs."
         )
         if not messages or messages[0].get("role") != "system":
             messages.insert(0, {"role": "system", "content": system_content})
@@ -325,6 +375,11 @@ class BaseAgent:
         self._total_streamed = ""
         t0 = time.time()
         self._ensure_system_message(messages)
+        # Mark the boundary of this turn so we can roll back cleanly on error.
+        # An exception inside the tool loop can leave the conversation in an
+        # invalid state (e.g. a dangling assistant tool_call message with no
+        # tool result), which would corrupt subsequent turns.
+        turn_start = len(messages)
         messages.append(self._build_user_message(user_input))
 
         try:
@@ -396,7 +451,10 @@ class BaseAgent:
             duration_ms = (time.time() - t0) * 1000
             self._log_chat(original_input, None, duration_ms, error=e)
             self._print(f"\nError: {e}\n")
-            messages.pop()
+            # Roll back EVERY message added during this failed turn, not just
+            # the user message. Otherwise an orphaned assistant(tool_calls)
+            # entry breaks the conversation protocol on the next turn.
+            del messages[turn_start:]
             return f"Error: {e}"
 
     # ── Interactive loop ────────────────────────────────────────────
